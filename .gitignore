@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+/playwright-report/
+/test-results/
+/blob-report/
+.playwright/
+
+# Local data (never commit a seeded database or uploaded documents)
+*.db
+*.sqlite
+*.sqlite3
+backend/var/
+backend/nexgile.db
+
+# Secrets — nothing in this list may ever be committed
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+service-account*.json
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

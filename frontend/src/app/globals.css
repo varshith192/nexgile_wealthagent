@@ -1,0 +1,197 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Neutrals: a faint blue cast keeps large white areas from reading flat. */
+    --background: 210 24% 98%;
+    --foreground: 218 32% 12%;
+    --surface: 0 0% 100%;
+    --surface-muted: 214 30% 97%;
+    --surface-raised: 0 0% 100%;
+
+    --ink: 218 32% 12%;
+    --ink-muted: 218 12% 42%;
+    --ink-subtle: 218 10% 58%;
+
+    --border: 216 20% 90%;
+    --input: 216 20% 88%;
+    --ring: 176 62% 26%;
+
+    /* Deep teal reads considered and institutional; it is the only accent. */
+    --primary: 176 62% 26%;
+    --primary-foreground: 0 0% 100%;
+    --primary-soft: 176 44% 94%;
+
+    --accent: 176 62% 26%;
+    --accent-foreground: 0 0% 100%;
+
+    --muted: 214 30% 96%;
+    --muted-foreground: 218 12% 45%;
+
+    --positive: 158 64% 28%;
+    --positive-soft: 158 52% 94%;
+    --negative: 352 66% 44%;
+    --negative-soft: 352 70% 96%;
+    --warning: 32 82% 38%;
+    --warning-soft: 38 88% 94%;
+    --info: 214 68% 40%;
+    --info-soft: 214 76% 95%;
+
+    --sidebar: 216 42% 11%;
+    --sidebar-foreground: 214 24% 88%;
+    --sidebar-muted: 215 16% 58%;
+    --sidebar-active: 216 38% 17%;
+    --sidebar-border: 216 30% 20%;
+
+    /* Categorical chart palette. Validated for colour-vision deficiency and
+       contrast against the light surface; see the data-viz notes in the README.
+       Assigned in fixed order and never cycled. */
+    --chart-1: #0e9488;
+    --chart-2: #eb6834;
+    --chart-3: #2a78d6;
+    --chart-4: #eda100;
+    --chart-5: #e87ba4;
+    --chart-6: #4a3aa7;
+    --chart-grid: 216 20% 90%;
+    --chart-axis: 218 10% 58%;
+    /* Diverging pair for signed values (drift over / under target). */
+    --chart-over: #eb6834;
+    --chart-under: #2a78d6;
+    --chart-benchmark: 218 10% 58%;
+
+    --radius: 0.625rem;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  .dark {
+    --background: 220 32% 8%;
+    --foreground: 214 24% 93%;
+    --surface: 219 30% 11%;
+    --surface-muted: 219 28% 14%;
+    --surface-raised: 219 28% 13%;
+
+    --ink: 214 24% 93%;
+    --ink-muted: 215 16% 65%;
+    --ink-subtle: 215 14% 52%;
+
+    --border: 218 24% 20%;
+    --input: 218 24% 22%;
+    --ring: 174 52% 46%;
+
+    --primary: 174 52% 42%;
+    --primary-foreground: 219 40% 8%;
+    --primary-soft: 176 40% 16%;
+
+    --accent: 174 52% 42%;
+    --accent-foreground: 219 40% 8%;
+
+    --muted: 219 26% 16%;
+    --muted-foreground: 215 16% 64%;
+
+    --positive: 158 52% 46%;
+    --positive-soft: 158 40% 16%;
+    --negative: 352 70% 60%;
+    --negative-soft: 352 44% 18%;
+    --warning: 38 78% 56%;
+    --warning-soft: 34 44% 17%;
+    --info: 214 72% 60%;
+    --info-soft: 214 44% 18%;
+
+    --sidebar: 220 36% 7%;
+    --sidebar-foreground: 214 24% 88%;
+    --sidebar-muted: 215 16% 55%;
+    --sidebar-active: 219 30% 14%;
+    --sidebar-border: 218 26% 16%;
+
+    /* Re-stepped for the dark surface and validated as its own set, not an
+       automatic inversion of the light palette. */
+    --chart-1: #1aa094;
+    --chart-2: #d95926;
+    --chart-3: #3987e5;
+    --chart-4: #c98500;
+    --chart-5: #d55181;
+    --chart-6: #9085e9;
+    --chart-grid: 218 24% 20%;
+    --chart-axis: 215 14% 52%;
+    --chart-over: #d95926;
+    --chart-under: #3987e5;
+    --chart-benchmark: 215 14% 52%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Money and percentages must align vertically in tables. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  ::selection {
+    @apply bg-primary/15;
+  }
+
+  /* A visible focus ring is a requirement, not a decoration. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  .card-surface {
+    @apply rounded-lg border border-border bg-surface shadow-card;
+  }
+
+  .section-label {
+    @apply text-2xs font-semibold uppercase tracking-[0.09em] text-ink-subtle;
+  }
+
+  .data-grid-row {
+    @apply border-b border-border/70 transition-colors last:border-0 hover:bg-surface-muted/70;
+  }
+
+  .scroll-x {
+    @apply overflow-x-auto;
+    scrollbar-width: thin;
+  }
+}
+
+@layer utilities {
+  .skeleton {
+    @apply relative overflow-hidden rounded bg-muted;
+  }
+
+  .skeleton::after {
+    @apply absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/55 to-transparent;
+    content: "";
+  }
+
+  .dark .skeleton::after {
+    @apply via-white/10;
+  }
+}
+
+/* Recharts leaves a focus outline on every SVG surface; suppress just that. */
+.recharts-wrapper:focus,
+.recharts-surface:focus {
+  outline: none;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

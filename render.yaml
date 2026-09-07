@@ -1,0 +1,66 @@
+# Render blueprint for the Nexgile WealthAgent API.
+#
+# Deploy: New → Blueprint → point at this repository. Render reads this file,
+# creates the service, and prompts for the secrets marked `sync: false`.
+
+services:
+  - type: web
+    name: nexgile-wealthagent-api
+    runtime: python
+    plan: starter
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+
+      # Supabase Postgres connection string.
+      # Project Settings → Database → Connection string → URI
+      - key: DATABASE_URL
+        sync: false
+
+      # Signing secret for issued access tokens. Render generates a strong one.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Authentication: "local" uses the users table; "supabase" verifies
+      # Supabase Auth access tokens against SUPABASE_JWT_SECRET.
+      - key: AUTH_PROVIDER
+        value: local
+
+      # Supabase (optional — required only for supabase auth or storage).
+      # SUPABASE_SERVICE_ROLE_KEY is a server-side secret and is never exposed
+      # to the browser.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+
+      # The API runs with no AI key. Set AI_PROVIDER and AI_API_KEY later to
+      # layer a hosted model over the same verified figures.
+      - key: AI_PROVIDER
+        value: mock
+      - key: AI_API_KEY
+        sync: false
+
+      # Allowed browser origins. Any *.vercel.app origin is permitted by
+      # default; add the production domain here.
+      - key: CORS_ORIGINS
+        sync: false
+
+      - key: STORAGE_BACKEND
+        value: local
+      - key: ENABLE_DEMO_ACCOUNTS
+        value: "true"
