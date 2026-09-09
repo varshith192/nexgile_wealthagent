@@ -71,7 +71,7 @@ class WealthAgentService:
             household_id=household_id,
             household_name=household.name,
             as_of=as_of,
-            currency="USD",
+            currency="INR",
             net_worth=self.portfolio.net_worth(household_id)["result"],
             portfolio=valuation,
             allocation=self.portfolio.allocation(household_id)["result"],
@@ -84,7 +84,7 @@ class WealthAgentService:
             tax={
                 "harvest": tax_overview["harvest"]["result"],
                 "realized": tax_overview["realized_gains"]["result"],
-                "rmd": tax_overview["rmd"],
+                "nps_annuitization": tax_overview["nps_annuitization"],
                 "asset_location": tax_overview["asset_location"]["result"],
                 "estimate": tax_overview["tax_estimate"]["result"],
             },

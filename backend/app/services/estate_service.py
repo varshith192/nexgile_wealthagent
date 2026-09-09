@@ -29,8 +29,9 @@ from app.models.identity import Client, Household, HouseholdMember, User
 from app.models.wealth import Account
 from app.workflows.approval_engine import ApprovalEngine
 
-# Account types where a missing beneficiary designation is a real problem.
-DESIGNATION_REQUIRED = {"retirement", "trust", "education"}
+# Account types where a missing nomination is a real problem.
+DESIGNATION_REQUIRED = {"epf", "ppf", "nps", "sukanya", "demat", "mutual_fund", "trust"}
+JOINT_REGISTRATIONS = {"joint", "huf"}
 
 
 class EstateService:
@@ -52,20 +53,39 @@ class EstateService:
         client = self.db.execute(
             select(Client).where(Client.household_id == household_id).order_by(Client.created_at)
         ).scalars().first()
-        gifts = self.db.execute(select(Gift).where(Gift.household_id == household_id)).scalars().all()
-        lifetime_gifts = sum(g.amount for g in gifts if not g.charity_id)
-        charitable = sum(g.amount for g in gifts if g.charity_id)
 
-        projection = calc.estate_projection(
-            gross_estate=gross_estate,
-            liabilities=liabilities,
-            lifetime_gifts_used=lifetime_gifts,
-            charitable_bequests=charitable,
-            is_married=bool(client and client.filing_status == "married_joint"),
-            as_of=as_of,
-        ).to_dict()
+        beneficiary_rows = self.db.execute(
+            select(Beneficiary).where(Beneficiary.household_id == household_id)
+        ).scalars().all()
+        nominated_totals: dict[str, float] = defaultdict(float)
+        for b in beneficiary_rows:
+            if b.account_id and b.designation == "primary" and b.status == "completed":
+                nominated_totals[b.account_id] += b.percentage
+        assets_with_nomination = sum(
+            a.balance for a in accounts if not a.is_liability and abs(nominated_totals.get(a.id, 0.0) - 100.0) < 0.01
+        )
+        assets_in_trust = sum(a.balance for a in accounts if not a.is_liability and a.account_type == "trust")
+        assets_jointly_held = sum(
+            a.balance for a in accounts if not a.is_liability and a.registration in JOINT_REGISTRATIONS
+        )
 
         plans = self.db.execute(select(EstatePlan).where(EstatePlan.household_id == household_id)).scalars().all()
+        latest_plan = max(plans, key=lambda p: p.executed_on or date.min, default=None)
+        has_valid_will = bool(latest_plan and latest_plan.status in {"current", "review_due"})
+        will_registered = bool(latest_plan and latest_plan.status == "current")
+        is_huf = any(a.registration == "huf" for a in accounts)
+
+        projection = calc.succession_review(
+            gross_estate=gross_estate,
+            liabilities=liabilities,
+            assets_with_nomination=assets_with_nomination,
+            assets_in_trust=assets_in_trust,
+            assets_jointly_held=assets_jointly_held,
+            has_valid_will=has_valid_will,
+            will_registered=will_registered,
+            is_huf=is_huf,
+            as_of=as_of,
+        ).to_dict()
         last_reviewed = max((p.last_reviewed_on for p in plans if p.last_reviewed_on), default=None)
 
         return {
@@ -264,22 +284,37 @@ class EstateService:
         ]
 
     def gift_summary(self, household_id: str, as_of: date) -> dict[str, Any]:
-        gifts = self.db.execute(select(Gift).where(Gift.household_id == household_id)).scalars().all()
-        client = self.db.execute(
-            select(Client).where(Client.household_id == household_id).order_by(Client.created_at)
-        ).scalars().first()
-        usage = calc.gift_exclusion_usage(
+        """Section 56(2)(x): gifts between specified relatives are exempt in
+        full; gifts from non-relatives are taxable in full above Rs 50,000.
+        """
+        gifts = self.db.execute(
+            select(Gift).where(Gift.household_id == household_id, Gift.charity_id.is_(None))
+        ).scalars().all()
+        household_members = {
+            m.full_name
+            for m in self.db.execute(
+                select(HouseholdMember).where(HouseholdMember.household_id == household_id)
+            ).scalars().all()
+        }
+        clients = {
+            c.full_name
+            for c in self.db.execute(select(Client).where(Client.household_id == household_id)).scalars().all()
+        }
+        relatives = household_members | clients
+
+        usage = calc.gift_tax_review(
             [
                 {
                     "recipient": g.recipient,
                     "amount": g.amount,
-                    "tax_year": g.tax_year,
-                    "is_charity": bool(g.charity_id),
+                    "gifted_on": g.gifted_on,
+                    # Every household member on file is treated as a specified
+                    # relative; a gift to anyone else counts toward the
+                    # non-relative threshold.
+                    "is_relative": g.recipient in relatives,
                 }
                 for g in gifts
             ],
-            as_of.year,
-            bool(client and client.filing_status == "married_joint"),
             as_of,
         ).to_dict()
 
@@ -293,9 +328,7 @@ class EstateService:
                     "amount": round(g.amount, 2),
                     "gifted_on": g.gifted_on.isoformat(),
                     "tax_year": g.tax_year,
-                    "is_qcd": g.is_qcd,
-                    "deduction_amount": round(g.deduction_amount, 2),
-                    "capital_gain_avoided": round(g.capital_gain_avoided, 2),
+                    "is_relative": g.recipient in relatives,
                     "notes": g.notes,
                 }
                 for g in sorted(gifts, key=lambda g: g.gifted_on, reverse=True)
@@ -379,19 +412,30 @@ class PhilanthropyService:
             select(Client).where(Client.household_id == household_id).order_by(Client.created_at)
         ).scalars().first()
 
-        charitable_gifts = [g for g in gifts if g.charity_id or g.is_qcd]
-        cash_gifts = sum(g.amount for g in charitable_gifts if g.gift_type == "cash")
-        appreciated = [g for g in charitable_gifts if g.gift_type == "securities"]
-        appreciated_fmv = sum(g.amount for g in appreciated)
-        appreciated_basis = sum(g.cost_basis or 0.0 for g in appreciated)
+        charitable_gifts = [g for g in gifts if g.charity_id]
+        donations_100_no_cap = 0.0
+        donations_50_no_cap = 0.0
+        donations_100_capped = 0.0
+        donations_50_capped = 0.0
+        for gift in charitable_gifts:
+            charity = self.db.get(Charity, gift.charity_id) if gift.charity_id else None
+            category = charity.section_80g_category if charity else "50_capped"
+            if category == "100_no_cap":
+                donations_100_no_cap += gift.amount
+            elif category == "50_no_cap":
+                donations_50_no_cap += gift.amount
+            elif category == "100_capped":
+                donations_100_capped += gift.amount
+            else:
+                donations_50_capped += gift.amount
 
-        deduction = calc.charitable_deduction(
-            cash_gifts=cash_gifts,
-            appreciated_gifts_fmv=appreciated_fmv,
-            appreciated_cost_basis=appreciated_basis,
-            adjusted_gross_income=client.annual_income if client else 500_000.0,
-            marginal_rate=client.marginal_tax_rate if client else 0.35,
-            ltcg_rate=client.ltcg_tax_rate if client else 0.20,
+        deduction = calc.section_80g_deduction(
+            donations_100_no_cap=donations_100_no_cap,
+            donations_50_no_cap=donations_50_no_cap,
+            donations_100_capped=donations_100_capped,
+            donations_50_capped=donations_50_capped,
+            adjusted_gross_income=client.annual_income if client else 5_00_000.0,
+            marginal_rate=client.marginal_tax_rate if client else 0.30,
             as_of=as_of,
         ).to_dict()
 
@@ -412,7 +456,6 @@ class PhilanthropyService:
                 "annual_grant_target": round(sum(v.annual_grant_target for v in vehicles), 2),
                 "grant_count": len(grants),
                 "charities_supported": len({c.id for _, c in grants}),
-                "qcd_total": round(sum(g.amount for g in gifts if g.is_qcd), 2),
             },
             "vehicles": [
                 {
@@ -465,16 +508,5 @@ class PhilanthropyService:
                     "review_date": p.review_date.isoformat() if p.review_date else None,
                 }
                 for p in plans
-            ],
-            "qcds": [
-                {
-                    "id": g.id,
-                    "recipient": g.recipient,
-                    "amount": round(g.amount, 2),
-                    "gifted_on": g.gifted_on.isoformat(),
-                    "tax_year": g.tax_year,
-                }
-                for g in gifts
-                if g.is_qcd
             ],
         }

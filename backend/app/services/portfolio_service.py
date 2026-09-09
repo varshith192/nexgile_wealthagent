@@ -112,7 +112,7 @@ class PortfolioService:
                     "dividend_yield": security.dividend_yield,
                     "expense_ratio": security.expense_ratio,
                     "esg_score": security.esg_score,
-                    "is_municipal": security.is_municipal,
+                    "is_tax_free": security.is_tax_free,
                     "price_status": security.price_status,
                     "price_as_of": security.price_as_of,
                     "acquired_on": holding.acquired_on,

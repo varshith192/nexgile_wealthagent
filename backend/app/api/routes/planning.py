@@ -72,30 +72,28 @@ def execute_harvest(harvest_id: str, db: DbSession, user: TaxWrite) -> dict:
     return TaxService(db).execute_harvest(harvest_id, user)
 
 
-@router.get("/tax/wash-sale-check")
-def wash_sale_check(
-    security_id: str,
+@router.get("/tax/regime-comparison")
+def regime_comparison(
     db: DbSession,
     user: CurrentUser,
     _: TaxRead,
     household_id: str | None = None,
-    sale_date: date | None = None,
+    gross_income: float | None = Query(default=None, gt=0, le=1_000_000_000),
 ) -> dict:
-    hid = resolve_household_id(db, user, household_id)
-    return TaxService(db).check_wash_sale(hid, security_id, sale_date)
-
-
-@router.get("/tax/roth-conversion")
-def roth_conversion(
-    db: DbSession,
-    user: CurrentUser,
-    _: TaxRead,
-    household_id: str | None = None,
-    amount: float = Query(default=100_000.0, gt=0, le=10_000_000),
-) -> dict:
+    """Old versus new tax regime — chosen afresh each financial year."""
     hid = resolve_household_id(db, user, household_id)
     as_of = PortfolioService(db).as_of(hid)
-    return TaxService(db).roth_analysis(hid, as_of, amount)
+    return TaxService(db).regime_comparison(hid, as_of, gross_income)
+
+
+@router.get("/tax/chapter-via")
+def chapter_via(
+    db: DbSession, user: CurrentUser, _: TaxRead, household_id: str | None = None
+) -> dict:
+    """Chapter VI-A deduction headroom (section 80C, 80D, 24(b) and more)."""
+    hid = resolve_household_id(db, user, household_id)
+    as_of = PortfolioService(db).as_of(hid)
+    return TaxService(db).chapter_via_summary(hid, as_of)
 
 
 # ------------------------------------------------------------------ estate

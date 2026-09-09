@@ -17,19 +17,17 @@ import {
   Info,
   Loader2,
   LockKeyhole,
+  Radar,
   ShieldCheck,
-  Sparkles,
   TrendingUp,
 } from "lucide-react";
 
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { DemoAccount } from "@/lib/types";
+import { DEMO_PASSWORD, type DemoAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge, Button, Card, Field, Input } from "@/components/ui";
 import { Logo } from "@/components/layout/logo";
-
-const DEMO_PASSWORD = "Demo1234!";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -132,7 +130,7 @@ export default function LoginPage() {
                 body: "Every number comes from the calculation engine and shows its method, as-of date, assumptions and limitations.",
               },
               {
-                icon: Sparkles,
+                icon: Radar,
                 title: "WealthAgent intelligence",
                 body: "Insights, recommendations and next actions grounded in your own data — never a number it invented.",
               },

@@ -89,7 +89,7 @@ class TestAccounts:
     def test_accounts_cover_the_supported_types(self, client, client_headers):
         accounts = client.get("/api/accounts", headers=client_headers).json()["accounts"]
         types = {a["account_type"] for a in accounts}
-        assert {"brokerage", "retirement", "banking", "mortgage"} <= types
+        assert {"demat", "epf", "savings", "home_loan"} <= types
 
     def test_each_account_declares_its_freshness_and_source(self, client, client_headers):
         for account in client.get("/api/accounts", headers=client_headers).json()["accounts"]:
@@ -98,8 +98,8 @@ class TestAccounts:
 
     def test_account_detail_returns_holdings_and_transactions(self, client, client_headers):
         accounts = client.get("/api/accounts", headers=client_headers).json()["accounts"]
-        brokerage = next(a for a in accounts if a["account_type"] == "brokerage")
-        body = client.get(f"/api/accounts/{brokerage['id']}", headers=client_headers).json()
+        demat = next(a for a in accounts if a["account_type"] == "demat")
+        body = client.get(f"/api/accounts/{demat['id']}", headers=client_headers).json()
         assert body["holdings"] and body["transactions"]
 
 
@@ -168,20 +168,20 @@ class TestTaxAndEstate:
     def test_tax_centre_returns_every_section(self, client, client_headers):
         body = client.get("/api/tax", headers=client_headers).json()
         for key in ("realized_gains", "tax_estimate", "harvest", "asset_location",
-                    "capital_gains_budget", "opportunities", "rmd", "roth_conversion",
-                    "wash_sale_windows", "charitable_securities", "projection"):
+                    "capital_gains_budget", "opportunities", "nps_annuitization", "regime_comparison",
+                    "advance_tax", "charitable_securities", "projection"):
             assert key in body
 
-    def test_harvest_candidates_all_hold_a_loss(self, client, client_headers):
-        opportunities = client.get("/api/tax", headers=client_headers).json()["harvest"]["result"]["opportunities"]
-        assert all(row["unrealized_loss"] < 0 for row in opportunities)
+    def test_harvest_candidates_all_hold_a_loss_or_a_gain(self, client, client_headers):
+        harvest = client.get("/api/tax", headers=client_headers).json()["harvest"]["result"]
+        assert all(row["unrealized_gain"] < 0 for row in harvest["loss_opportunities"])
+        assert all(row["unrealized_gain"] > 0 for row in harvest["gain_opportunities"])
 
-    def test_wash_sale_check_reports_a_window(self, client, client_headers):
-        holdings = client.get("/api/holdings?page_size=5", headers=client_headers).json()["rows"]
-        security_id = holdings[0]["security_id"]
-        body = client.get(f"/api/tax/wash-sale-check?security_id={security_id}", headers=client_headers).json()
-        assert body["result"]["risk"] in {"clear", "blocked"}
-        assert body["result"]["window_start"] < body["result"]["window_end"]
+    def test_regime_comparison_recommends_the_cheaper_regime(self, client, client_headers):
+        body = client.get("/api/tax/regime-comparison", headers=client_headers).json()
+        assert body["result"]["recommended_regime"] in {"old", "new"}
+        assert body["result"]["old_regime_tax"] >= 0
+        assert body["result"]["new_regime_tax"] >= 0
 
     def test_estate_reports_projection_and_beneficiary_gaps(self, client, client_headers):
         body = client.get("/api/estate", headers=client_headers).json()
@@ -206,7 +206,7 @@ class TestDocuments:
 
     def test_classification_is_a_suggestion_with_reasons(self, client, client_headers):
         body = client.post(
-            "/api/documents/classify", json={"filename": "2025_Tax_Return.pdf"}, headers=client_headers
+            "/api/documents/classify", json={"filename": "Capital_Gains_Statement_2025.pdf"}, headers=client_headers
         ).json()
         assert body["suggested_category"] == "tax"
         assert body["detected_year"] == 2025
@@ -224,7 +224,7 @@ class TestDocuments:
     def test_uploading_stores_the_file_and_suggests_a_category(self, client, client_headers):
         response = client.post(
             "/api/documents",
-            files={"file": ("2026_Form_1099_Consolidated.pdf", b"%PDF-1.4 test", "application/pdf")},
+            files={"file": ("Form16_AY2026-27.pdf", b"%PDF-1.4 test", "application/pdf")},
             headers=client_headers,
         )
         assert response.status_code == 201
@@ -404,8 +404,8 @@ class TestInstitutional:
             "/api/participant/readiness", json={"deferral_rate": 0.20}, headers=participant_headers
         ).json()
         assert (
-            higher["projection"]["result"]["projected_balance"]
-            > base["projection"]["result"]["projected_balance"]
+            higher["projection"]["result"]["projected_corpus"]
+            > base["projection"]["result"]["projected_corpus"]
         )
 
     def test_readiness_rejects_an_impossible_age(self, client, participant_headers):

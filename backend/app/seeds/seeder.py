@@ -7,6 +7,10 @@ Consistency rule: derived values are computed, never transcribed. Account
 balances come from holdings; goal balances come from linked accounts; plan
 assets come from participants; the performance series ends on the portfolio's
 actual market value.
+
+Indian domain: EPF/EPS/NPS/PPF retirement accounts, section 111A/112A capital
+gains, Chapter VI-A deductions, nominee-based succession (India levies no
+estate tax), and section 80G charitable giving.
 """
 
 from __future__ import annotations
@@ -80,7 +84,7 @@ from app.models.institutional import (
     Sponsor,
 )
 from app.models.planning import Goal, GoalAccount, Recommendation, Scenario, Task
-from app.models.tax import RMD, Harvest, TaxOpportunity, WashSaleWindow
+from app.models.tax import Harvest, NpsAnnuitization, TaxOpportunity, WashSaleWindow
 from app.models.wealth import (
     Account,
     AllocationTarget,
@@ -122,16 +126,16 @@ TRADING_DAYS_PER_YEAR = 252
 
 # Every staff account uses the same demo password. Never a production credential.
 STAFF = [
-    ("marcus.webb@nexgile.example", "Marcus Webb", Role.ADVISOR, "Senior Wealth Advisor", "Advisor Demo", True),
-    ("elena.vargas@nexgile.example", "Elena Vargas", Role.ADVISOR, "Wealth Advisor", None, False),
-    ("priya.raman@nexgile.example", "Priya Raman", Role.COMPLIANCE, "Head of Compliance", "Compliance Demo", True),
-    ("ellen.sorensen@nexgile.example", "Ellen Sorensen", Role.ADMIN, "Managing Director", "Admin Demo", True),
-    ("tobias.frank@nexgile.example", "Tobias Frank", Role.INVESTMENT_TEAM, "Portfolio Strategist", "Investment Team Demo", False),
-    ("hana.mori@nexgile.example", "Hana Mori", Role.TAX_SPECIALIST, "Director of Tax Planning", "Tax Specialist Demo", False),
-    ("declan.ross@nexgile.example", "Declan Ross", Role.ESTATE_TRUST, "Trust & Estate Counsel", "Estate Demo", False),
-    ("noor.haddad@nexgile.example", "Noor Haddad", Role.OPERATIONS, "Client Service Manager", "Operations Demo", False),
-    ("diane.ellis@brightpath.example", "Diane Ellis", Role.PLAN_SPONSOR, "VP People Operations", "Sponsor Demo", True),
-    ("andre.fitzgerald@brightpath.example", "Andre Fitzgerald", Role.PARTICIPANT, "Senior Engineer", "Participant Demo", True),
+    ("arjun.mehta@nexgile.example", "Arjun Mehta", Role.ADVISOR, "Senior Wealth Advisor", "Advisor Demo", True),
+    ("kavita.rao@nexgile.example", "Kavita Rao", Role.ADVISOR, "Wealth Advisor", None, False),
+    ("neha.kapoor@nexgile.example", "Neha Kapoor", Role.COMPLIANCE, "Head of Compliance", "Compliance Demo", True),
+    ("suresh.pillai@nexgile.example", "Suresh Pillai", Role.ADMIN, "Managing Director", "Admin Demo", True),
+    ("rajesh.bhatt@nexgile.example", "Rajesh Bhatt", Role.INVESTMENT_TEAM, "Portfolio Strategist", "Investment Team Demo", False),
+    ("meera.subramanian@nexgile.example", "Meera Subramanian", Role.TAX_SPECIALIST, "Director of Tax Planning", "Tax Specialist Demo", False),
+    ("vikram.chandrasekhar@nexgile.example", "Vikram Chandrasekhar", Role.ESTATE_TRUST, "Trust & Succession Counsel", "Estate Demo", False),
+    ("ritu.malhotra@nexgile.example", "Ritu Malhotra", Role.OPERATIONS, "Client Service Manager", "Operations Demo", False),
+    ("deepa.krishnan@brightpath.example", "Deepa Krishnan", Role.PLAN_SPONSOR, "VP Human Resources", "Sponsor Demo", True),
+    ("nikhil.verma@brightpath.example", "Nikhil Verma", Role.PARTICIPANT, "Senior Engineer", "Participant Demo", True),
 ]
 
 TABLES_IN_DELETE_ORDER = [
@@ -140,7 +144,7 @@ TABLES_IN_DELETE_ORDER = [
     InvestmentOption, Contribution, Participant, Plan, Sponsor,
     ActionItem, Message, MessageThread, Meeting, DocumentRequest, DocumentVersion, Document,
     Grant, GivingPlan, Gift, DAF, Charity, DistributionRequest, Beneficiary, PowerOfAttorney, Trust, EstatePlan,
-    WashSaleWindow, Harvest, RMD, TaxOpportunity,
+    WashSaleWindow, Harvest, NpsAnnuitization, TaxOpportunity,
     Scenario, GoalAccount, Goal, Task, Recommendation,
     PerformancePoint, PortfolioPosition, AllocationTarget, Transaction, TaxLot, Holding, Portfolio,
     Account, Security, Benchmark, Custodian,
@@ -155,7 +159,8 @@ class DemoSeeder:
         self.rng = random.Random(SEED)
         self.today = today or date.today()
         self.now = datetime.now(timezone.utc)
-        self.tax_year = self.today.year
+        # India's assessment year runs 1 April to 31 March.
+        self.tax_year = self.today.year if self.today.month >= 4 else self.today.year - 1
 
         self.users: dict[str, User] = {}
         self.securities: dict[str, Security] = {}
@@ -230,7 +235,7 @@ class DemoSeeder:
         price_as_of = self.now - timedelta(hours=2)
         for (
             symbol, name, sec_type, asset_class, sector, region, price, prev, div_yield,
-            expense, beta, vol, esg, municipal, identical,
+            expense, beta, vol, esg, tax_free, identical,
         ) in SECURITIES:
             security = Security(
                 symbol=symbol,
@@ -246,7 +251,7 @@ class DemoSeeder:
                 beta=beta,
                 annualised_volatility=vol,
                 esg_score=esg,
-                is_municipal=municipal,
+                is_tax_free=tax_free,
                 substantially_identical_to=identical,
                 price_as_of=price_as_of,
                 price_status="fresh",
@@ -254,8 +259,15 @@ class DemoSeeder:
             self.db.add(security)
             self.securities[symbol] = security
 
-        for name, ein, mission, location, rating in CHARITIES:
-            charity = Charity(name=name, ein_masked=ein, mission_area=mission, location=location, rating=rating)
+        for name, pan, mission, location, rating, category in CHARITIES:
+            charity = Charity(
+                name=name,
+                ein_masked=pan,
+                mission_area=mission,
+                location=location,
+                rating=rating,
+                section_80g_category=category,
+            )
             self.db.add(charity)
             self.charities.append(charity)
 
@@ -283,27 +295,27 @@ class DemoSeeder:
                 full_name=full_name,
                 role=str(role),
                 title=title,
-                phone=f"+1-503-555-{self.rng.randint(1000, 9999)}",
+                phone=f"+91-98{self.rng.randint(10000000, 99999999)}",
                 avatar_initials="".join(p[0] for p in full_name.split()[:2]).upper(),
                 password_hash=password,
                 is_active=True,
                 is_demo=is_demo,
                 demo_label=demo_label,
-                timezone="America/Los_Angeles",
+                timezone="Asia/Kolkata",
             )
             self.db.add(user)
             self.users[email] = user
 
-        team = AdvisorTeam(name="Pacific Northwest Private Wealth", region="West")
+        team = AdvisorTeam(name="Nexgile Private Wealth — West Zone", region="West")
         self.db.add(team)
         self.db.flush()
-        team.lead_advisor_id = self.users["marcus.webb@nexgile.example"].id
+        team.lead_advisor_id = self.users["arjun.mehta@nexgile.example"].id
         self.team = team
 
     # ------------------------------------------------------------------
     def seed_households(self) -> None:
         password = hash_password(settings.demo_password)
-        advisors = [self.users["marcus.webb@nexgile.example"], self.users["elena.vargas@nexgile.example"]]
+        advisors = [self.users["arjun.mehta@nexgile.example"], self.users["kavita.rao@nexgile.example"]]
 
         for index, blueprint in enumerate(HOUSEHOLDS):
             advisor = advisors[0]
@@ -333,7 +345,7 @@ class DemoSeeder:
             )
             self.db.add(
                 AdvisorAssignment(
-                    advisor_id=self.users["noor.haddad@nexgile.example"].id,
+                    advisor_id=self.users["ritu.malhotra@nexgile.example"].id,
                     household_id=household.id,
                     team_id=self.team.id,
                     role_on_account="client_service",
@@ -364,7 +376,7 @@ class DemoSeeder:
                         password_hash=password,
                         is_demo=True,
                         demo_label="Client Demo",
-                        timezone="America/Los_Angeles",
+                        timezone="Asia/Kolkata",
                     )
                     self.db.add(user)
                     self.db.flush()
@@ -376,10 +388,10 @@ class DemoSeeder:
                     full_name=principal["full_name"],
                     birth_date=date.fromisoformat(principal["birth_date"]),
                     retirement_age=principal["retirement_age"],
-                    filing_status=principal["filing_status"],
+                    taxpayer_type=principal["taxpayer_type"],
+                    tax_regime=principal["tax_regime"],
                     marginal_tax_rate=principal["marginal_tax_rate"],
                     ltcg_tax_rate=principal["ltcg_tax_rate"],
-                    state_tax_rate=principal["state_tax_rate"],
                     annual_income=principal["annual_income"],
                     annual_savings=principal["annual_savings"],
                     risk_tolerance=principal["risk_tolerance"],
@@ -463,12 +475,12 @@ class DemoSeeder:
             household_id=household.id,
             custodian_id=custodian.id,
             name=spec["name"],
-            account_number_masked=f"****{self.rng.randint(1000, 9999)}",
+            account_number_masked=f"XXXX{self.rng.randint(1000, 9999)}",
             account_type=spec["account_type"],
             account_subtype=spec.get("subtype"),
             tax_treatment=spec.get("tax_treatment", "taxable"),
             registration=spec.get("registration", "individual"),
-            currency="USD",
+            currency="INR",
             balance=spec.get("liability") or spec.get("cash_only") or 0.0,
             cash_balance=spec.get("cash", 0.0) if not is_liability else 0.0,
             is_liability=is_liability,
@@ -546,7 +558,7 @@ class DemoSeeder:
                         price=lot_cost,
                         amount=round(-lot_quantity * lot_cost, 2),
                         trade_date=lot_date,
-                        settle_date=lot_date + timedelta(days=2),
+                        settle_date=lot_date + timedelta(days=1),
                         description=f"Purchase {security.symbol}",
                     )
                 )
@@ -556,7 +568,7 @@ class DemoSeeder:
         return market_value
 
     def _create_income_and_sales(self, account: Account) -> None:
-        """Dividends and a handful of realised sales so the tax view has data."""
+        """Dividends/interest and a handful of realised sales for the tax view."""
         holdings = self.db.execute(select(Holding).where(Holding.account_id == account.id)).scalars().all()
         for holding in holdings[:4]:
             security = self.db.get(Security, holding.security_id)
@@ -575,7 +587,7 @@ class DemoSeeder:
                         amount=round(amount, 2),
                         trade_date=pay_date,
                         settle_date=pay_date,
-                        description=f"{security.symbol} dividend",
+                        description=f"{security.symbol} distribution",
                     )
                 )
 
@@ -585,10 +597,12 @@ class DemoSeeder:
         for holding in holdings[:2]:
             security = self.db.get(Security, holding.security_id)
             sale_date = self.today - timedelta(days=self.rng.randint(40, 220))
-            if sale_date.year != self.tax_year or sale_date < account.opened_on:
-                sale_date = date(self.tax_year, max(self.today.month - 3, 1), 12)
+            fy_start = date(self.tax_year, 4, 1)
+            fy_end = date(self.tax_year + 1, 3, 31)
+            if not (fy_start <= sale_date <= fy_end) or sale_date < account.opened_on:
+                sale_date = date(self.tax_year, max(self.today.month - 3, 4) if self.today.month > 4 else 6, 12)
             quantity = round(holding.quantity * 0.06, 4)
-            proceeds = quantity * security.last_price * 0.97
+            proceeds = quantity * security.last_price * 0.996  # brokerage + STT
             cost = quantity * holding.average_cost
             gain = proceeds - cost
             long_term = (sale_date - (holding.acquired_on or sale_date)).days >= 366
@@ -598,11 +612,11 @@ class DemoSeeder:
                     security_id=security.id,
                     transaction_type="sell",
                     quantity=quantity,
-                    price=round(security.last_price * 0.97, 4),
+                    price=round(security.last_price * 0.996, 4),
                     amount=round(proceeds, 2),
-                    fees=round(proceeds * 0.0002, 2),
+                    fees=round(proceeds * 0.0005, 2),
                     trade_date=sale_date,
-                    settle_date=sale_date + timedelta(days=2),
+                    settle_date=sale_date + timedelta(days=1),
                     description=f"Sale {security.symbol}",
                     realized_gain=round(gain, 2),
                     is_long_term=long_term,
@@ -615,9 +629,9 @@ class DemoSeeder:
             return
 
         rng = random.Random(SEED + hash(blueprint["key"]) % 10_000)
-        equity_weight = blueprint["targets"]["us_equity"] + blueprint["targets"]["intl_equity"]
-        daily_vol = (0.16 * equity_weight + 0.05 * (1 - equity_weight)) / math.sqrt(TRADING_DAYS_PER_YEAR)
-        daily_drift = (0.072 * equity_weight + 0.042 * (1 - equity_weight)) / TRADING_DAYS_PER_YEAR
+        equity_weight = blueprint["targets"]["indian_equity"] + blueprint["targets"].get("intl_equity", 0.0)
+        daily_vol = (0.17 * equity_weight + 0.045 * (1 - equity_weight)) / math.sqrt(TRADING_DAYS_PER_YEAR)
+        daily_drift = (0.12 * equity_weight + 0.072 * (1 - equity_weight)) / TRADING_DAYS_PER_YEAR
         bench_vol = daily_vol * 0.94
         bench_drift = daily_drift * 0.97
 
@@ -628,10 +642,10 @@ class DemoSeeder:
                 days.append(cursor)
             cursor += timedelta(days=1)
 
+        returns = [rng.gauss(daily_drift, daily_vol) for _ in days]
         # The benchmark shares most of its variance with the portfolio; only the
         # active return is independent. An uncorrelated series would produce
         # implausible multi-point gaps over a single year.
-        returns = [rng.gauss(daily_drift, daily_vol) for _ in days]
         tracking_vol = daily_vol * 0.22
         bench_returns = [
             bench_drift + (r - daily_drift) * (bench_vol / daily_vol) + rng.gauss(0.0, tracking_vol)
@@ -749,13 +763,19 @@ class DemoSeeder:
 
     # ------------------------------------------------------------------
     def seed_tax(self) -> None:
+        """Loss and gain harvesting candidates, RMD-equivalent NPS annuitization,
+        and tax opportunities, all against the Indian rules in
+        `app.calculations.tax`.
+        """
+        from app.calculations import tax as tax_calc
+
         for blueprint in HOUSEHOLDS:
             household = self.households[blueprint["key"]]
             client = self.db.execute(
                 select(Client).where(Client.household_id == household.id).order_by(Client.created_at)
             ).scalars().first()
 
-            loss_lots = self.db.execute(
+            lots = self.db.execute(
                 select(TaxLot, Holding, Security, Account)
                 .join(Holding, TaxLot.holding_id == Holding.id)
                 .join(Security, Holding.security_id == Security.id)
@@ -763,20 +783,33 @@ class DemoSeeder:
                 .where(Account.household_id == household.id, Account.tax_treatment == "taxable")
             ).all()
 
-            candidates = [
+            loss_candidates = [
                 (lot, holding, security, account)
-                for lot, holding, security, account in loss_lots
-                if lot.quantity * (security.last_price - lot.cost_per_share) < -2_500
+                for lot, holding, security, account in lots
+                if lot.quantity * (security.last_price - lot.cost_per_share) < -25_000
             ]
-            candidates.sort(key=lambda row: row[0].quantity * (row[2].last_price - row[0].cost_per_share))
+            loss_candidates.sort(key=lambda row: row[0].quantity * (row[2].last_price - row[0].cost_per_share))
 
-            total_benefit = 0.0
-            for lot, holding, security, account in candidates[:3]:
+            gain_candidates = [
+                (lot, holding, security, account)
+                for lot, holding, security, account in lots
+                if security.asset_class == "indian_equity"
+                and (self.today - lot.acquired_on).days >= 366
+                and lot.quantity * (security.last_price - lot.cost_per_share) >= 10_000
+            ]
+            gain_candidates.sort(
+                key=lambda row: row[0].quantity * (row[2].last_price - row[0].cost_per_share), reverse=True
+            )
+
+            total_loss_benefit = 0.0
+            exemption_remaining = tax_calc.LTCG_EQUITY_EXEMPTION
+
+            for lot, holding, security, account in loss_candidates[:3]:
                 loss = lot.quantity * (security.last_price - lot.cost_per_share)
                 long_term = (self.today - lot.acquired_on).days >= 366
-                rate = (client.ltcg_tax_rate if long_term else client.marginal_tax_rate) + client.state_tax_rate
-                benefit = abs(loss) * rate
-                total_benefit += benefit
+                rate = tax_calc.LTCG_EQUITY_RATE if long_term else tax_calc.STCG_EQUITY_RATE
+                benefit = abs(loss) * rate * (1 + tax_calc.HEALTH_EDUCATION_CESS)
+                total_loss_benefit += benefit
                 replacement = next(
                     (
                         s
@@ -801,30 +834,85 @@ class DemoSeeder:
                         holding_period="long_term" if long_term else "short_term",
                         estimated_tax_benefit=round(benefit, 2),
                         wash_sale_risk="clear",
-                        wash_sale_window_ends=self.today + timedelta(days=30),
+                        wash_sale_window_ends=None,
                         status="identified",
                         tax_year=self.tax_year,
-                        notes=f"Replacement candidate: {replacement.symbol if replacement else 'none identified'}",
+                        notes=(
+                            f"Loss harvest. Replacement candidate: {replacement.symbol if replacement else 'none identified'}. "
+                            "India has no wash-sale rule; the replacement is chosen for style continuity, not compliance."
+                        ),
                     )
                 )
 
-            if total_benefit > 0:
+            for lot, holding, security, account in gain_candidates[:2]:
+                if exemption_remaining <= 0:
+                    break
+                gain = lot.quantity * (security.last_price - lot.cost_per_share)
+                harvestable = min(gain, exemption_remaining)
+                exemption_remaining -= harvestable
+                benefit = harvestable * tax_calc.LTCG_EQUITY_RATE * (1 + tax_calc.HEALTH_EDUCATION_CESS)
+                self.db.add(
+                    Harvest(
+                        household_id=household.id,
+                        account_id=account.id,
+                        security_id=security.id,
+                        tax_lot_id=lot.id,
+                        replacement_security_id=None,
+                        quantity=lot.quantity,
+                        cost_basis=round(lot.quantity * lot.cost_per_share, 2),
+                        market_value=round(lot.quantity * security.last_price, 2),
+                        unrealized_loss=round(gain, 2),  # positive: this is a gain-harvest row
+                        holding_period="long_term",
+                        estimated_tax_benefit=round(benefit, 2),
+                        wash_sale_risk="clear",
+                        wash_sale_window_ends=None,
+                        status="identified",
+                        tax_year=self.tax_year,
+                        notes=(
+                            "Gain harvest inside the section 112A exemption. Sell and repurchase immediately "
+                            "to reset the cost base at no tax cost — India has no wash-sale rule."
+                        ),
+                    )
+                )
+
+            if total_loss_benefit > 0:
                 self.db.add(
                     TaxOpportunity(
                         household_id=household.id,
                         opportunity_type="tax_loss_harvest",
-                        title="Harvest available losses before year end",
+                        title="Harvest available losses before the financial year ends",
                         description=(
-                            f"{len(candidates[:3])} lots hold unrealised losses that can offset realised gains "
-                            "of the same character this year."
+                            f"{len(loss_candidates[:3])} lots hold unrealised losses that can offset gains "
+                            "of the same character realised this financial year."
                         ),
-                        estimated_benefit=round(total_benefit, 2),
+                        estimated_benefit=round(total_loss_benefit, 2),
                         tax_year=self.tax_year,
                         severity="medium",
                         status="identified",
-                        deadline=date(self.tax_year, 12, 31),
-                        assumptions=["Losses are usable against gains of the same character this year."],
-                        supporting_data={"candidate_count": len(candidates[:3])},
+                        deadline=date(self.tax_year + 1, 3, 31),
+                        assumptions=["Losses are usable against gains of a permitted character this year."],
+                        supporting_data={"candidate_count": len(loss_candidates[:3])},
+                        as_of=self.now,
+                    )
+                )
+
+            if gain_candidates and exemption_remaining < tax_calc.LTCG_EQUITY_EXEMPTION:
+                used = tax_calc.LTCG_EQUITY_EXEMPTION - exemption_remaining
+                self.db.add(
+                    TaxOpportunity(
+                        household_id=household.id,
+                        opportunity_type="ltcg_exemption",
+                        title="Use the section 112A exemption before it lapses",
+                        description=(
+                            f"Rs {used:,.0f} of this year's Rs 1,25,000 long-term equity gains exemption is "
+                            "unused. Booking a gain and repurchasing costs nothing and resets the cost base."
+                        ),
+                        estimated_benefit=round(used * tax_calc.LTCG_EQUITY_RATE * 1.04, 2),
+                        tax_year=self.tax_year,
+                        severity="low",
+                        status="identified",
+                        deadline=date(self.tax_year + 1, 3, 31),
+                        assumptions=["The section 112A exemption does not carry forward if unused."],
                         as_of=self.now,
                     )
                 )
@@ -840,93 +928,64 @@ class DemoSeeder:
                         household_id=household.id,
                         account_id=taxable_accounts[0].id,
                         opportunity_type="asset_location",
-                        title="Relocate taxable bond income to a tax-deferred account",
-                        description="Corporate bond income held in a taxable account is taxed at ordinary rates.",
-                        estimated_benefit=round(taxable_accounts[0].balance * 0.0012, 2),
+                        title="Move debt allocation into PPF or EPF where there is headroom",
+                        description="Debt fund income held in a taxable account is taxed at the slab rate on redemption.",
+                        estimated_benefit=round(taxable_accounts[0].balance * 0.0015, 2),
                         tax_year=self.tax_year,
                         severity="low",
                         status="identified",
-                        deadline=date(self.tax_year, 12, 31),
-                        assumptions=["Income taxed at a 35% ordinary rate.", "Repositioning uses new contributions only."],
+                        deadline=date(self.tax_year + 1, 3, 31),
+                        assumptions=["Income taxed at the household's marginal slab rate.", "Repositioning uses new contributions only."],
                         as_of=self.now,
                     )
                 )
                 self.db.add(
                     TaxOpportunity(
                         household_id=household.id,
-                        opportunity_type="charitable_securities",
-                        title="Fund charitable giving with appreciated securities",
-                        description="Gifting long-term appreciated shares avoids the capital gain and preserves the deduction.",
-                        estimated_benefit=round(taxable_accounts[0].balance * 0.0035, 2),
+                        opportunity_type="section_80g",
+                        title="Fund charitable giving before 31 March",
+                        description="Section 80G deductions require the donation to be made within the financial year.",
+                        estimated_benefit=round(taxable_accounts[0].balance * 0.002, 2),
                         tax_year=self.tax_year,
                         severity="medium",
                         status="identified",
-                        deadline=date(self.tax_year, 12, 15),
-                        assumptions=["Shares held longer than one year.", "Household itemises deductions."],
+                        deadline=date(self.tax_year + 1, 3, 15),
+                        assumptions=["Household itemises under the old regime.", "Donee holds a valid 80G registration."],
                         as_of=self.now,
                     )
                 )
 
-            # A live wash-sale window on one household so the guard rail is visible.
-            if blueprint["key"] == "johnson" and taxable_accounts:
-                security = self.securities["VWO"]
-                self.db.add(
-                    WashSaleWindow(
-                        account_id=taxable_accounts[0].id,
-                        security_id=security.id,
-                        window_start=self.today - timedelta(days=12),
-                        window_end=self.today + timedelta(days=18),
-                        reason="Shares purchased 12 days ago; a loss sale now would be disallowed",
-                        is_active=True,
-                    )
-                )
-
-            # RMDs where an account owner has reached the required age.
+            # NPS annuitization tracking where a member is close to age 60.
             if client and client.birth_date:
                 age = self.today.year - client.birth_date.year
-                if age >= 73:
-                    ira = self.db.execute(
+                if age >= 55:
+                    nps = self.db.execute(
                         select(Account).where(
-                            Account.household_id == household.id, Account.tax_treatment == "tax_deferred"
+                            Account.household_id == household.id, Account.account_type == "nps"
                         )
                     ).scalars().first()
-                    if ira:
-                        factor = 26.5 if age == 73 else max(27.4 - (age - 72), 8.9)
-                        prior_balance = ira.balance * 0.94
-                        required = prior_balance / factor
+                    if nps:
+                        corpus_at_exit = nps.balance * 1.4  # illustrative growth to exit
+                        required = corpus_at_exit * 0.40
                         self.db.add(
-                            RMD(
+                            NpsAnnuitization(
                                 client_id=client.id,
-                                account_id=ira.id,
+                                account_id=nps.id,
                                 tax_year=self.tax_year,
-                                prior_year_end_balance=round(prior_balance, 2),
-                                life_expectancy_factor=factor,
-                                required_amount=round(required, 2),
-                                distributed_amount=round(required * 0.36, 2),
-                                deadline=date(self.tax_year, 12, 31),
+                                corpus_at_exit=round(corpus_at_exit, 2),
+                                required_annuity_amount=round(required, 2),
+                                annuity_purchased_amount=0.0,
+                                exit_deadline=date(client.birth_date.year + 60, client.birth_date.month, min(client.birth_date.day, 28)),
                                 status="pending",
-                                satisfied_by_qcd=0.0,
-                            )
-                        )
-                        self.db.add(
-                            TaxOpportunity(
-                                household_id=household.id,
-                                account_id=ira.id,
-                                opportunity_type="qcd",
-                                title="Satisfy the remaining RMD with a qualified charitable distribution",
-                                description="A QCD counts toward the RMD and is excluded from taxable income.",
-                                estimated_benefit=round(required * 0.64 * client.marginal_tax_rate, 2),
-                                tax_year=self.tax_year,
-                                severity="high",
-                                status="identified",
-                                deadline=date(self.tax_year, 12, 31),
-                                assumptions=["Account owner is over 70½.", "Recipient is a qualified public charity."],
-                                as_of=self.now,
+                                annuity_provider=None,
                             )
                         )
 
     # ------------------------------------------------------------------
     def seed_estate_and_giving(self) -> None:
+        """Succession planning (India levies no estate tax; the objective is
+        clarity and control) and philanthropy under section 80G.
+        """
         for blueprint in HOUSEHOLDS:
             household = self.households[blueprint["key"]]
             clients = self.db.execute(
@@ -940,22 +999,28 @@ class DemoSeeder:
                 select(Account).where(Account.household_id == household.id, Account.is_liability.is_(False))
             ).scalars().all()
 
-            reviewed_years_ago = {"johnson": 4.2, "okonkwo": 1.1, "lindqvist": 2.4, "delacroix": 0.6}[blueprint["key"]]
+            reviewed_years_ago = {"sharma": 4.2, "reddy": 1.1, "iyer": 2.4, "menon": 0.6}[blueprint["key"]]
             last_reviewed = self.today - timedelta(days=int(reviewed_years_ago * 365))
+            is_huf = any(a.account_type == "huf" for a in accounts)
 
             plan = EstatePlan(
                 household_id=household.id,
-                plan_name=f"{household.name} Estate Plan",
+                plan_name=f"{household.name} Succession Plan",
                 document_type="will",
                 status="current" if reviewed_years_ago < 3 else "review_due",
                 executed_on=last_reviewed - timedelta(days=365),
                 last_reviewed_on=last_reviewed,
                 next_review_due=last_reviewed + timedelta(days=int(3 * 365)),
-                attorney="Whitlock & Reyes LLP",
-                jurisdiction=f"{household.state}, USA",
+                attorney="Chandrasekhar & Rao Advocates",
+                jurisdiction=f"{household.state}, India",
                 executor=clients[-1].full_name if len(clients) > 1 else primary.full_name,
-                notes="Pour-over will directing residuary assets into the revocable trust.",
+                notes=(
+                    "Registered will directing residuary assets per the family's succession plan."
+                    if reviewed_years_ago < 3
+                    else "Will on file but has not been reviewed since a life event; nominations should be re-confirmed."
+                ),
                 estimated_estate_value=round(sum(a.balance for a in accounts), 2),
+                projected_estate_tax=0.0,  # India levies no estate or inheritance tax.
             )
             self.db.add(plan)
             self.db.flush()
@@ -968,15 +1033,15 @@ class DemoSeeder:
                         estate_plan_id=plan.id,
                         account_id=trust_account.id,
                         name=trust_account.name,
-                        trust_type="irrevocable",
+                        trust_type="private_family_trust",
                         grantor=primary.full_name,
-                        trustee=clients[-1].full_name if len(clients) > 1 else "Northmoor Trust Company",
-                        successor_trustee="Northmoor Trust Company",
+                        trustee=clients[-1].full_name if len(clients) > 1 else "Independent Trustee",
+                        successor_trustee="Chandrasekhar & Rao Advocates",
                         funded_amount=round(trust_account.balance, 2),
                         is_funded=True,
                         established_on=trust_account.opened_on,
                         situs=household.state,
-                        distribution_standard="Health, education, maintenance and support",
+                        distribution_standard="Health, education, maintenance and support of named beneficiaries",
                         status="active",
                     )
                 )
@@ -986,8 +1051,8 @@ class DemoSeeder:
                     household_id=household.id,
                     poa_type="financial",
                     principal=primary.full_name,
-                    agent=clients[-1].full_name if len(clients) > 1 else "Northmoor Trust Company",
-                    successor_agent="Whitlock & Reyes LLP",
+                    agent=clients[-1].full_name if len(clients) > 1 else "Chandrasekhar & Rao Advocates",
+                    successor_agent="Chandrasekhar & Rao Advocates",
                     executed_on=last_reviewed - timedelta(days=365),
                     status="current" if reviewed_years_ago < 5 else "review_due",
                 )
@@ -1003,16 +1068,18 @@ class DemoSeeder:
                 )
             )
 
-            # Beneficiaries; one account is deliberately left without one so the
-            # gap-detection rule has something real to find.
-            designation_accounts = [a for a in accounts if a.account_type in {"retirement", "trust", "education"}]
+            # Nominations. In India a nominee holds the asset as trustee for the
+            # legal heirs — it is not the same as a will beneficiary. One account
+            # is deliberately left without a nomination so the gap-detection
+            # rule has something real to find.
+            nomination_required = [a for a in accounts if a.account_type in {"epf", "ppf", "nps", "sukanya", "demat", "mutual_fund"}]
             spouse = clients[-1].full_name if len(clients) > 1 else None
             children = [m for m in members if m.relationship_type in {"child", "grandchild"}]
 
-            for index, account in enumerate(designation_accounts):
-                if blueprint["key"] == "johnson" and account.account_subtype == "roth_ira":
+            for index, account in enumerate(nomination_required):
+                if blueprint["key"] == "sharma" and account.account_type == "sukanya":
                     continue  # intentional gap
-                if spouse and account.account_type == "retirement":
+                if spouse and account.account_type in {"epf", "ppf", "nps"}:
                     self.db.add(
                         Beneficiary(
                             household_id=household.id,
@@ -1025,24 +1092,10 @@ class DemoSeeder:
                             last_confirmed_on=last_reviewed,
                         )
                     )
-                    for child in children:
-                        self.db.add(
-                            Beneficiary(
-                                household_id=household.id,
-                                account_id=account.id,
-                                full_name=child.full_name,
-                                relationship_type=child.relationship_type,
-                                designation="contingent",
-                                percentage=round(100.0 / max(len(children), 1), 2),
-                                birth_date=child.birth_date,
-                                status="completed",
-                                last_confirmed_on=last_reviewed,
-                            )
-                        )
                 elif children:
                     share = round(100.0 / len(children), 2)
                     # Deliberately short of 100% on one account per household.
-                    adjust = -15.0 if index == len(designation_accounts) - 1 else 0.0
+                    adjust = -20.0 if index == len(nomination_required) - 1 else 0.0
                     for position, child in enumerate(children):
                         self.db.add(
                             Beneficiary(
@@ -1066,7 +1119,7 @@ class DemoSeeder:
                         requested_by=primary.full_name,
                         beneficiary_name=children[0].full_name if children else primary.full_name,
                         amount=round(trust_accounts[0].balance * 0.018, 2),
-                        purpose="Annual education distribution under the HEMS standard",
+                        purpose="Annual education distribution per the trust deed",
                         distribution_type="discretionary",
                         requested_on=self.today - timedelta(days=9),
                         status=str(ApprovalStatus.SUBMITTED),
@@ -1074,40 +1127,41 @@ class DemoSeeder:
                     )
                 )
 
-            # Gifting
+            # Gifting — section 56(2)(x): gifts to specified relatives are exempt
+            # regardless of amount; from non-relatives, exempt only to Rs 50,000.
             for index, child in enumerate(children[:2]):
                 self.db.add(
                     Gift(
                         household_id=household.id,
                         recipient=child.full_name,
                         gift_type="cash",
-                        amount=19_000.0 if index == 0 else 12_000.0,
-                        gifted_on=date(self.tax_year, 3, 14),
+                        amount=2_50_000.0 if index == 0 else 1_50_000.0,
+                        gifted_on=date(self.tax_year, 6, 14),
                         tax_year=self.tax_year,
-                        uses_annual_exclusion=True,
-                        notes="Annual exclusion gift",
+                        uses_annual_exclusion=False,  # not applicable in India; kept for schema compatibility
+                        notes="Gift to a specified relative — exempt under section 56(2)(x) regardless of amount.",
                     )
                 )
 
-            # Philanthropy
+            # Philanthropy under section 80G. India has no donor-advised fund
+            # structure; giving runs through a private trust or foundation, or
+            # direct donation to a registered charity.
             charity_pool = self.charities
-            vehicle_type, sponsor_org = (
-                ("private_foundation", None) if blueprint["key"] == "okonkwo" else ("daf", "Rivermark Charitable Trust")
-            )
-            daf_balance = round(sum(a.balance for a in accounts) * 0.038, 2)
-            grant_target = round(daf_balance * 0.28, 2)
-            granted = round(grant_target * (0.42 if blueprint["key"] == "johnson" else 0.78), 2)
+            vehicle_type = "private_foundation" if blueprint["key"] in {"reddy", "iyer"} else "charitable_trust"
+            corpus = round(sum(a.balance for a in accounts) * 0.028, 2)
+            annual_target = round(corpus * 0.22, 2)
+            granted = round(annual_target * (0.42 if blueprint["key"] == "sharma" else 0.78), 2)
 
             daf = DAF(
                 household_id=household.id,
-                name=f"{household.name.split()[0]} Charitable Fund",
+                name=f"{household.name.split()[0]} Charitable Foundation",
                 vehicle_type=vehicle_type,
-                sponsor_organisation=sponsor_org,
-                balance=daf_balance,
-                contributed_ytd=round(daf_balance * 0.18, 2),
+                sponsor_organisation=None,
+                balance=corpus,
+                contributed_ytd=round(corpus * 0.15, 2),
                 granted_ytd=granted,
-                annual_grant_target=grant_target,
-                payout_requirement=0.05 if vehicle_type == "private_foundation" else None,
+                annual_grant_target=annual_target,
+                payout_requirement=None,
                 established_on=date.fromisoformat(blueprint["since"]) + timedelta(days=400),
                 status="active",
             )
@@ -1115,8 +1169,8 @@ class DemoSeeder:
             self.db.flush()
 
             remaining = granted
-            for index, charity in enumerate(charity_pool[: 4 if blueprint["key"] != "delacroix" else 2]):
-                amount = round(remaining * (0.4 if index == 0 else 0.25), 2)
+            for index, charity in enumerate(charity_pool[: 5 if blueprint["key"] != "menon" else 2]):
+                amount = round(remaining * (0.38 if index == 0 else 0.22), 2)
                 if amount <= 0:
                     break
                 remaining -= amount
@@ -1125,7 +1179,7 @@ class DemoSeeder:
                         daf_id=daf.id,
                         charity_id=charity.id,
                         amount=amount,
-                        granted_on=date(self.tax_year, min(2 + index * 2, 12), 18),
+                        granted_on=date(self.tax_year, min(3 + index * 2, 12), 18),
                         purpose="Unrestricted operating support",
                         is_recurring=index < 2,
                         status="completed",
@@ -1136,83 +1190,52 @@ class DemoSeeder:
             self.db.add(
                 GivingPlan(
                     household_id=household.id,
-                    name=f"{self.tax_year} Giving Plan",
+                    name=f"FY {self.tax_year}-{str(self.tax_year + 1)[-2:]} Giving Plan",
                     tax_year=self.tax_year,
-                    target_amount=grant_target,
+                    target_amount=annual_target,
                     committed_amount=granted,
                     mission_focus=charity_pool[0].mission_area,
-                    strategy="Fund the DAF with appreciated securities, grant quarterly",
+                    strategy="Fund the foundation before 31 March; grant across the financial year",
                     status="active",
-                    review_date=date(self.tax_year, 11, 15),
+                    review_date=date(self.tax_year + 1, 2, 15),
                     last_updated_at=self.now - timedelta(days=21),
                 )
             )
 
-            appreciated = round(grant_target * 0.55, 2)
-            self.db.add(
-                Gift(
-                    household_id=household.id,
-                    charity_id=charity_pool[0].id,
-                    recipient=charity_pool[0].name,
-                    gift_type="securities",
-                    amount=appreciated,
-                    cost_basis=round(appreciated * 0.42, 2),
-                    gifted_on=date(self.tax_year, 6, 3),
-                    tax_year=self.tax_year,
-                    uses_annual_exclusion=False,
-                    deduction_amount=appreciated,
-                    capital_gain_avoided=round(appreciated * 0.58, 2),
-                    notes="Long-term appreciated shares contributed to the charitable fund",
-                )
-            )
-
-            if blueprint["key"] == "lindqvist":
-                self.db.add(
-                    Gift(
-                        household_id=household.id,
-                        charity_id=charity_pool[1].id,
-                        recipient=charity_pool[1].name,
-                        gift_type="cash",
-                        amount=48_000.0,
-                        gifted_on=date(self.tax_year, 8, 22),
-                        tax_year=self.tax_year,
-                        uses_annual_exclusion=False,
-                        is_qcd=True,
-                        deduction_amount=0.0,
-                        notes="Qualified charitable distribution counting toward the RMD",
-                    )
-                )
+        # Household-specific succession findings (readable from the frontend
+        # via app.calculations.institutional.succession_review at request time;
+        # no extra table needed).
 
     # ------------------------------------------------------------------
     DOCUMENT_SPECS = [
-        ("2025_Tax_Return.pdf", "tax", "Tax Return", 2025, None, "reviewed"),
-        ("2025_Form_1099_Consolidated.pdf", "tax", "Form 1099", 2025, None, "reviewed"),
-        ("2024_Schedule_K-1.pdf", "tax", "Schedule K-1", 2024, None, "reviewed"),
-        ("Revocable_Trust_Agreement.pdf", "estate", "Trust Agreement", None, None, "reviewed"),
-        ("Last_Will_and_Testament.pdf", "estate", "Will", None, None, "reviewed"),
-        ("Durable_Power_of_Attorney.pdf", "estate", "Power of Attorney", None, None, "reviewed"),
-        ("Q2_Brokerage_Statement.pdf", "investment", "Account Statement", None, None, "pending_review"),
-        ("Investment_Policy_Statement.pdf", "investment", "Account Statement", None, None, "reviewed"),
-        ("Umbrella_Liability_Policy.pdf", "insurance", "Insurance Policy", None, 62, "reviewed"),
-        ("Term_Life_Insurance_Policy.pdf", "insurance", "Insurance Policy", None, 340, "reviewed"),
-        ("Cascade_Bank_Statement_August.pdf", "banking", "Bank Statement", None, None, "pending_review"),
-        ("401k_Annual_Statement.pdf", "retirement", "Retirement Statement", None, None, "reviewed"),
-        ("Property_Deed_Coastal.pdf", "legal", "Legal Agreement", None, None, "reviewed"),
-        ("Charitable_Fund_Agreement.pdf", "legal", "Legal Agreement", None, None, "pending_review"),
+        ("Form16_AY2025-26.pdf", "tax", "Form 16", 2025, None, "reviewed"),
+        ("ITR_Acknowledgement_AY2025-26.pdf", "tax", "ITR Acknowledgement", 2025, None, "reviewed"),
+        ("Capital_Gains_Statement_FY2024-25.pdf", "tax", "Capital Gains Statement", 2024, None, "reviewed"),
+        ("Registered_Will.pdf", "estate", "Will", None, None, "reviewed"),
+        ("Family_Trust_Deed.pdf", "estate", "Trust Agreement", None, None, "reviewed"),
+        ("Power_of_Attorney.pdf", "estate", "Power of Attorney", None, None, "reviewed"),
+        ("Demat_Statement_Q2.pdf", "investment", "Account Statement", None, None, "pending_review"),
+        ("Investment_Policy_Note.pdf", "investment", "Account Statement", None, None, "reviewed"),
+        ("Term_Life_Insurance_Policy.pdf", "insurance", "Insurance Policy", None, None, "reviewed"),
+        ("Health_Insurance_Policy.pdf", "insurance", "Insurance Policy", None, 340, "reviewed"),
+        ("HDFC_Bank_Statement_August.pdf", "banking", "Bank Statement", None, None, "pending_review"),
+        ("EPF_Passbook.pdf", "retirement", "Retirement Statement", None, None, "reviewed"),
+        ("Property_Sale_Deed.pdf", "legal", "Legal Agreement", None, None, "reviewed"),
+        ("Foundation_Trust_Deed.pdf", "legal", "Legal Agreement", None, None, "pending_review"),
     ]
 
     def seed_documents(self) -> None:
         from app.ai.mock_ai import MockAIService
 
         classifier = MockAIService()
-        advisor = self.users["marcus.webb@nexgile.example"]
+        advisor = self.users["arjun.mehta@nexgile.example"]
 
         for blueprint in HOUSEHOLDS:
             household = self.households[blueprint["key"]]
             client_user = next(
                 (u for u in self.users.values() if u.role == Role.CLIENT), advisor
             )
-            count = len(self.DOCUMENT_SPECS) if blueprint["key"] == "johnson" else 8
+            count = len(self.DOCUMENT_SPECS) if blueprint["key"] == "sharma" else 8
 
             for filename, category, doc_type, year, expires_in, review_status in self.DOCUMENT_SPECS[:count]:
                 classification = classifier.classify_document(filename)
@@ -1260,9 +1283,9 @@ class DemoSeeder:
                 DocumentRequest(
                     household_id=household.id,
                     requested_by_id=advisor.id,
-                    title=f"{self.tax_year} property tax assessment",
+                    title=f"AY {self.tax_year + 1}-{str(self.tax_year + 2)[-2:]} Form 26AS",
                     category="tax",
-                    reason="Needed to complete the year-end tax projection.",
+                    reason="Needed to reconcile TDS credits before filing the return.",
                     due_date=self.today + timedelta(days=21),
                     status="open",
                 )
@@ -1270,21 +1293,21 @@ class DemoSeeder:
 
     # ------------------------------------------------------------------
     def seed_collaboration(self) -> None:
-        advisor = self.users["marcus.webb@nexgile.example"]
-        tax_lead = self.users["hana.mori@nexgile.example"]
+        advisor = self.users["arjun.mehta@nexgile.example"]
+        tax_lead = self.users["meera.subramanian@nexgile.example"]
 
         thread_specs = [
-            ("Q3 portfolio review preparation", "review", [
+            ("Quarterly portfolio review preparation", "review", [
                 ("advisor", "Ahead of our review I have refreshed the allocation analysis and the goal projections. Two items are worth your time: the concentrated position and the education funding gap."),
                 ("client", "Thanks — the concentration is the one that worries me. What are the options if we trim it?"),
-                ("advisor", "We can stage the reduction across two tax years and pair it with harvested losses to keep the tax cost down. I have modelled it and will bring the numbers to the meeting."),
+                ("advisor", "We can stage the reduction across two financial years and pair it with harvested losses to keep the tax cost down. I have modelled it and will bring the numbers to the review."),
             ]),
-            ("Year-end tax planning", "tax", [
-                ("tax_specialist", "I have identified harvesting candidates across the taxable accounts. Estimated benefit is meaningful and every candidate clears the wash-sale check."),
+            ("Financial year-end tax planning", "tax", [
+                ("tax_specialist", "I have identified both loss and gain harvesting candidates across the taxable accounts. The gain-harvest set uses the unused section 112A exemption at no tax cost."),
                 ("client", "Please go ahead and prepare the recommendation for review."),
             ]),
-            ("Beneficiary designations", "estate", [
-                ("advisor", "One retirement account still has no primary beneficiary on file. We should complete that before year end."),
+            ("Nomination update", "estate", [
+                ("advisor", "One account still has no nomination on file. Please remember that a nominee holds the asset in trust for your legal heirs — we should also confirm it agrees with your will."),
             ]),
         ]
 
@@ -1293,7 +1316,7 @@ class DemoSeeder:
             client = self.db.execute(
                 select(Client).where(Client.household_id == household.id).order_by(Client.created_at)
             ).scalars().first()
-            specs = thread_specs if blueprint["key"] == "johnson" else thread_specs[:2]
+            specs = thread_specs if blueprint["key"] == "sharma" else thread_specs[:2]
 
             for offset, (subject, topic, messages) in enumerate(specs):
                 thread = MessageThread(household_id=household.id, subject=subject, topic=topic, status="open")
@@ -1334,10 +1357,10 @@ class DemoSeeder:
                 agenda=[
                     "Portfolio performance and allocation",
                     "Goal funding update",
-                    "Tax planning for the remainder of the year",
-                    "Estate document review",
+                    "Tax planning before the financial year ends",
+                    "Nomination and succession review",
                 ],
-                attendees=[household.name, "Marcus Webb", "Hana Mori"],
+                attendees=[household.name, "Arjun Mehta", "Meera Subramanian"],
             )
             self.db.add(upcoming)
             self.db.flush()
@@ -1345,7 +1368,7 @@ class DemoSeeder:
                 ActionItem(
                     meeting_id=upcoming.id,
                     household_id=household.id,
-                    title="Confirm education funding contribution increase",
+                    title="Confirm education SIP increase",
                     owner=household.name,
                     due_date=self.today + timedelta(days=34),
                     status="open",
@@ -1359,25 +1382,25 @@ class DemoSeeder:
                 meeting_type="planning",
                 starts_at=self.now - timedelta(days=self.rng.randint(70, 140)),
                 duration_minutes=90,
-                location="Portland office",
+                location="Advisor office",
                 status="completed",
-                agenda=["Net worth review", "Goal reprioritisation", "Estate plan status"],
+                agenda=["Net worth review", "Goal reprioritisation", "Succession plan status"],
                 notes="Reviewed the full balance sheet and reset goal priorities for the year.",
-                summary="Agreed to increase education funding and to revisit the concentrated position in Q3.",
-                attendees=[household.name, "Marcus Webb"],
+                summary="Agreed to increase education SIPs and to revisit the concentrated position in Q3.",
+                attendees=[household.name, "Arjun Mehta"],
             )
             self.db.add(past)
             self.db.flush()
             for title, status in (
-                ("Update estate documents with attorney", "open"),
-                ("Increase 529 contributions", "complete"),
+                ("Update nominations with custodian", "open"),
+                ("Increase Sukanya Samriddhi contribution", "complete"),
             ):
                 self.db.add(
                     ActionItem(
                         meeting_id=past.id,
                         household_id=household.id,
                         title=title,
-                        owner="Marcus Webb" if "estate" in title.lower() else household.name,
+                        owner="Arjun Mehta" if "nomination" in title.lower() else household.name,
                         due_date=self.today + timedelta(days=self.rng.randint(-20, 45)),
                         status=status,
                     )
@@ -1386,9 +1409,9 @@ class DemoSeeder:
             # Tasks
             for title, category, priority, due_offset, status in (
                 ("Prepare quarterly review pack", "review", "high", 5, "in_progress"),
-                ("Collect signed beneficiary form", "service", "high", -3, "open"),
-                ("Confirm 529 contribution increase", "planning", "medium", 12, "open"),
-                ("Reconcile external account feed", "operations", "low", 21, "open"),
+                ("Collect signed nomination form", "service", "high", -3, "open"),
+                ("Confirm Sukanya Samriddhi contribution increase", "planning", "medium", 12, "open"),
+                ("Reconcile Form 26AS against TDS records", "operations", "low", 21, "open"),
             ):
                 self.db.add(
                     Task(
@@ -1406,16 +1429,16 @@ class DemoSeeder:
 
     # ------------------------------------------------------------------
     def seed_institutional(self) -> None:
-        sponsor_user = self.users["diane.ellis@brightpath.example"]
-        participant_user = self.users["andre.fitzgerald@brightpath.example"]
-        advisor = self.users["marcus.webb@nexgile.example"]
+        sponsor_user = self.users["deepa.krishnan@brightpath.example"]
+        participant_user = self.users["nikhil.verma@brightpath.example"]
+        advisor = self.users["arjun.mehta@nexgile.example"]
 
         sponsor = Sponsor(
-            name="Brightpath Robotics, Inc.",
+            name="Brightpath Robotics Pvt Ltd",
             industry="Advanced Manufacturing",
             employee_count=1_284,
-            ein_masked="**-***5512",
-            location="Beaverton, OR",
+            pan_masked="AABCB****K",
+            location="Pune, Maharashtra",
             relationship_since=date(2017, 4, 1),
             primary_contact_id=sponsor_user.id,
         )
@@ -1424,22 +1447,22 @@ class DemoSeeder:
 
         plan = Plan(
             sponsor_id=sponsor.id,
-            name="Brightpath Robotics 401(k) Plan",
-            plan_number="001",
-            plan_type="401k",
-            plan_year_end=date(self.tax_year, 12, 31),
+            name="Brightpath Robotics EPF & NPS Programme",
+            plan_number="EPFO-001",
+            plan_type="epf",
+            plan_year_end=date(self.tax_year + 1, 3, 31),
             eligible_employees=1_240,
-            participating_employees=1_058,
-            average_deferral_rate=0.071,
-            employer_match_formula="100% of the first 4% of pay",
-            vesting_schedule="3-year cliff",
+            participating_employees=1_240,  # EPF enrolment is statutory
+            average_deferral_rate=0.155,
+            employer_match_formula="Statutory 12% of basic pay; EPS diversion up to the wage ceiling",
+            vesting_schedule="EPF fully vested; EPS at 10 years; gratuity at 5 years",
             auto_enrollment=True,
-            auto_enrollment_rate=0.06,
+            auto_enrollment_rate=0.12,
             auto_escalation=True,
-            auto_escalation_cap=0.15,
+            auto_escalation_cap=0.20,
             loans_allowed=True,
             hardship_allowed=True,
-            recordkeeper="Ironbridge Retirement Services",
+            recordkeeper="EPFO Regional Office, Pune",
             advisor_id=advisor.id,
             status="active",
         )
@@ -1448,32 +1471,32 @@ class DemoSeeder:
 
         # Second plan so the sponsor workspace has a plan selector with real data.
         sponsor_two = Sponsor(
-            name="Kestrel Health Systems",
+            name="Kestrel Health Systems India Pvt Ltd",
             industry="Healthcare",
             employee_count=642,
-            ein_masked="**-***8890",
-            location="Boise, ID",
+            pan_masked="AACCK****M",
+            location="Bengaluru, Karnataka",
             relationship_since=date(2020, 9, 15),
         )
         self.db.add(sponsor_two)
         self.db.flush()
         plan_two = Plan(
             sponsor_id=sponsor_two.id,
-            name="Kestrel Health Systems 403(b) Plan",
-            plan_number="002",
-            plan_type="403b",
-            plan_year_end=date(self.tax_year, 12, 31),
+            name="Kestrel Health EPF & NPS Corporate Programme",
+            plan_number="EPFO-002",
+            plan_type="epf_nps",
+            plan_year_end=date(self.tax_year + 1, 3, 31),
             eligible_employees=598,
-            participating_employees=441,
-            average_deferral_rate=0.058,
-            employer_match_formula="50% of the first 6% of pay",
-            vesting_schedule="6-year graded",
+            participating_employees=598,
+            average_deferral_rate=0.132,
+            employer_match_formula="Statutory 12% of basic pay, plus 5% NPS Corporate on basic",
+            vesting_schedule="EPF fully vested; EPS at 10 years; gratuity at 5 years",
             auto_enrollment=True,
-            auto_enrollment_rate=0.04,
+            auto_enrollment_rate=0.12,
             auto_escalation=False,
             loans_allowed=True,
             hardship_allowed=True,
-            recordkeeper="Ironbridge Retirement Services",
+            recordkeeper="EPFO Regional Office, Bengaluru",
             advisor_id=advisor.id,
             status="active",
         )
@@ -1492,34 +1515,33 @@ class DemoSeeder:
     def _seed_participants(self, plan: Plan, count: int, linked_user: User | None) -> None:
         rng = random.Random(SEED + len(plan.name))
         total_assets = 0.0
-        hce_threshold = 160_000.0
+        eps_wage_ceiling = 15_000.0
 
         for index in range(count):
             if index == 0 and linked_user:
                 full_name = linked_user.full_name
-                birth_date = date(1982, 4, 17)
+                birth_date = date(1988, 4, 17)
                 hire_date = date(2016, 2, 8)
-                salary = 214_000.0
-                deferral = 0.09
-                roth_deferral = 0.03
-                balance = 486_400.0
+                salary = 22_00_000.0
+                deferral = 0.12
+                vpf_rate = 0.06
+                balance = 48_64_000.0
             else:
                 full_name = f"{rng.choice(FIRST_NAMES)} {rng.choice(LAST_NAMES)}"
-                birth_date = date(rng.randint(1962, 2000), rng.randint(1, 12), rng.randint(1, 28))
+                birth_date = date(rng.randint(1968, 2002), rng.randint(1, 12), rng.randint(1, 28))
                 hire_date = date(rng.randint(2009, 2024), rng.randint(1, 12), rng.randint(1, 28))
-                salary = round(rng.uniform(62_000, 285_000), -2)
-                deferral = round(rng.choice([0.0, 0.03, 0.04, 0.06, 0.06, 0.08, 0.10, 0.12, 0.15]), 4)
-                roth_deferral = round(rng.choice([0.0, 0.0, 0.0, 0.02, 0.03]), 4)
+                salary = round(rng.uniform(4_50_000, 32_00_000), -3)
+                deferral = 0.12  # EPF is statutory
+                vpf_rate = round(rng.choice([0.0, 0.0, 0.0, 0.02, 0.04, 0.06]), 4)
                 years = max((self.today - hire_date).days / 365.25, 0.5)
-                balance = round(salary * (deferral + roth_deferral + 0.04) * years * rng.uniform(1.05, 1.9), 2)
+                balance = round(salary * (deferral + vpf_rate + 0.10) * years * rng.uniform(1.05, 1.7), 2)
 
             years_of_service = (self.today - hire_date).days / 365.25
-            if "cliff" in plan.vesting_schedule:
-                vested = 1.0 if years_of_service >= 3 else 0.0
-            else:
-                vested = min(max((int(years_of_service) - 1) * 0.20, 0.0), 1.0)
+            # Employee contributions are always fully theirs in India.
+            vested = 1.0
 
-            employer_balance = round(balance * 0.32, 2)
+            monthly_basic = salary / 12 * 0.5  # basic is typically ~50% of CTC
+            employer_balance = round(balance * 0.30, 2)
             participant = Participant(
                 plan_id=plan.id,
                 user_id=linked_user.id if (index == 0 and linked_user) else None,
@@ -1529,15 +1551,15 @@ class DemoSeeder:
                 hire_date=hire_date,
                 annual_salary=salary,
                 deferral_rate=deferral,
-                roth_deferral_rate=roth_deferral,
+                vpf_contribution_rate=vpf_rate,
                 account_balance=balance,
-                roth_balance=round(balance * roth_deferral * 4, 2),
+                vpf_balance=round(balance * vpf_rate * 3, 2),
                 employer_balance=employer_balance,
                 vested_percentage=vested,
-                is_hce=salary >= hce_threshold,
-                is_auto_enrolled=hire_date >= date(2018, 1, 1),
-                has_beneficiary=rng.random() > 0.16,
-                retirement_age=rng.choice([62, 65, 65, 67, 67, 70]),
+                is_hce=monthly_basic > eps_wage_ceiling * 4,
+                is_auto_enrolled=True,
+                has_beneficiary=rng.random() > 0.14,
+                retirement_age=60,
                 status="active" if rng.random() > 0.06 else "terminated",
                 engagement_score=round(rng.uniform(0.2, 0.98), 3),
             )
@@ -1547,57 +1569,53 @@ class DemoSeeder:
 
             # Two years of quarterly contribution history.
             for year in (self.tax_year - 1, self.tax_year):
-                quarters = 4 if year < self.tax_year else max((self.today.month - 1) // 3 + 1, 1)
-                for quarter in range(1, quarters + 1):
-                    period_start = date(year, 3 * (quarter - 1) + 1, 1)
-                    period_end = date(year, min(3 * quarter, 12), 28)
-                    quarterly_pay = salary / 4
-                    catchup = (
-                        quarterly_pay * 0.02
-                        if (self.today.year - birth_date.year) >= 50 and deferral > 0
-                        else 0.0
-                    )
+                quarters = 4 if year < self.tax_year else max((self.today.month - 3) // 3 + 1, 1) if self.today.month >= 4 else 1
+                for quarter in range(1, min(quarters, 4) + 1):
+                    period_start = date(year, min(4 + 3 * (quarter - 1), 12), 1)
+                    period_end = date(year, min(6 + 3 * (quarter - 1), 12), 28)
+                    quarterly_basic = monthly_basic * 3
                     self.db.add(
                         Contribution(
                             participant_id=participant.id,
                             plan_id=plan.id,
                             period_start=period_start,
                             period_end=period_end,
-                            employee_pretax=round(quarterly_pay * deferral, 2),
-                            employee_roth=round(quarterly_pay * roth_deferral, 2),
-                            employee_catchup=round(catchup, 2),
-                            employer_match=round(quarterly_pay * min(deferral + roth_deferral, 0.04), 2),
-                            employer_profit_sharing=round(quarterly_pay * 0.01, 2),
+                            employee_pretax=round(quarterly_basic * deferral, 2),
+                            employee_vpf=round(quarterly_basic * vpf_rate, 2),
+                            employee_catchup=0.0,  # not an Indian statutory concept
+                            employer_match=round(quarterly_basic * (deferral - 0.0833 * min(1, 15000 / max(monthly_basic, 1))), 2),
+                            employer_profit_sharing=0.0,
                             tax_year=year,
                         )
                     )
 
-            if rng.random() < 0.13 and plan.loans_allowed:
-                original = round(min(balance * 0.35, 50_000), -2)
-                if original >= 2_000:
+            if rng.random() < 0.11 and plan.loans_allowed:
+                original = round(min(balance * 0.5, 5_00_000), -3)
+                if original >= 25_000:
                     issued = self.today - timedelta(days=rng.randint(120, 900))
                     self.db.add(
                         ParticipantLoan(
                             participant_id=participant.id,
                             original_amount=original,
                             outstanding_balance=round(original * rng.uniform(0.25, 0.85), 2),
-                            interest_rate=0.0825,
-                            term_months=60,
-                            payment_amount=round(original / 60 * 1.12, 2),
+                            interest_rate=0.0,  # EPF advances are not loans and carry no interest
+                            term_months=0,
+                            payment_amount=0.0,
                             issued_on=issued,
-                            matures_on=issued + timedelta(days=5 * 365),
-                            loan_type="hardship" if rng.random() < 0.2 else "general",
-                            status="current",
+                            matures_on=issued,
+                            loan_type="hardship" if rng.random() < 0.3 else "housing",
+                            status="settled",
                         )
                     )
 
-        # The participant grid is a representative sample of the full population;
-        # plan totals scale from it so both views describe the same plan.
+        # The participant grid is a representative sample of the full
+        # population; plan totals scale from it so both views describe the
+        # same programme.
         roster = self.db.execute(select(Participant).where(Participant.plan_id == plan.id)).scalars().all()
         average_balance = total_assets / max(len(roster), 1)
         plan.total_assets = round(average_balance * plan.participating_employees, 2)
         plan.average_deferral_rate = round(
-            sum(p.deferral_rate + p.roth_deferral_rate for p in roster) / max(len(roster), 1), 4
+            sum(p.deferral_rate + p.vpf_contribution_rate for p in roster) / max(len(roster), 1), 4
         )
         plan.plan_health_score = 0.0
 
@@ -1623,17 +1641,17 @@ class DemoSeeder:
 
     def _seed_plan_investments(self, plan: Plan) -> None:
         lineup = [
-            ("Meridian Target 2045 Fund", "MTFDX", "Target Date 2045", 0.0038, 0.0052, 0.0812, 0.0774, 32, True, 0),
-            ("Meridian Target 2035 Fund", "MTHDX", "Target Date 2035", 0.0038, 0.0052, 0.0691, 0.0668, 38, False, 0),
-            ("Harborline S&P 500 Index", "HSPIX", "Large Cap Blend", 0.0004, 0.0048, 0.1124, 0.1131, 12, False, 0),
-            ("Northmoor Large Growth", "NLGRX", "Large Cap Growth", 0.0074, 0.0061, 0.0918, 0.1246, 78, False, 15),
-            ("Cascade Small Cap Value", "CSCVX", "Small Cap Value", 0.0091, 0.0079, 0.0642, 0.0731, 68, False, 25),
-            ("Ironbridge International Equity", "IIEQX", "Foreign Large Blend", 0.0058, 0.0064, 0.0587, 0.0602, 54, False, 10),
-            ("Harborline Core Bond Index", "HCBIX", "Intermediate Core Bond", 0.0005, 0.0041, 0.0148, 0.0152, 22, False, 0),
-            ("Meridian Stable Value", "MSVFX", "Stable Value", 0.0031, 0.0037, 0.0284, 0.0271, 28, False, 5),
+            ("HDFC Balanced Advantage Fund — Direct Growth", "HDFCBAL", "Balanced Advantage", 0.0089, 0.0102, 0.1284, 0.1231, 32, True, 0),
+            ("UTI Nifty 50 Index Fund — Direct Growth", "UTINIFTY", "Large Cap Index", 0.0018, 0.0048, 0.1224, 0.1231, 22, False, 0),
+            ("Parag Parikh Flexi Cap Fund — Direct Growth", "PPFASFLEXI", "Flexi Cap", 0.0063, 0.0079, 0.1618, 0.1246, 12, False, 0),
+            ("HDFC Mid-Cap Opportunities Fund — Direct", "HDFCMID", "Mid Cap", 0.0074, 0.0068, 0.1918, 0.1746, 38, False, 15),
+            ("SBI Small Cap Fund — Direct Growth", "SBISMALL", "Small Cap", 0.0069, 0.0079, 0.1442, 0.1831, 68, False, 25),
+            ("ICICI Prudential Corporate Bond Fund — Direct", "ICICICORPB", "Corporate Bond", 0.0032, 0.0041, 0.0748, 0.0752, 22, False, 10),
+            ("HDFC Short Term Debt Fund — Direct Growth", "HDFCSHORT", "Short Duration", 0.0028, 0.0041, 0.0728, 0.0742, 28, False, 0),
+            ("NPS Tier I — Auto Choice (Moderate)", "NPSAUTO", "NPS Auto Choice", 0.0009, 0.0009, 0.0984, 0.0952, 28, False, 5),
         ]
         assets = plan.total_assets or 1.0
-        weights = [0.22, 0.16, 0.18, 0.09, 0.05, 0.08, 0.13, 0.09]
+        weights = [0.20, 0.14, 0.18, 0.08, 0.05, 0.09, 0.14, 0.12]
         participant_total = plan.participating_employees or 1
 
         for (name, ticker, category, expense, median, three_year, benchmark, percentile, qdia, revenue), weight in zip(
@@ -1654,7 +1672,7 @@ class DemoSeeder:
                     benchmark_three_year=benchmark,
                     peer_rank_percentile=percentile,
                     ips_status="pass",
-                    is_qdia=qdia,
+                    is_default_scheme=qdia,
                     revenue_share_bps=revenue,
                 )
             )
@@ -1662,25 +1680,25 @@ class DemoSeeder:
         self.db.add(
             FiduciaryReview(
                 plan_id=plan.id,
-                title=f"Q{max((self.today.month - 1) // 3, 1)} Investment Committee Review",
-                review_period=f"Q{max((self.today.month - 1) // 3, 1)} {self.tax_year}",
+                title=f"Q{max((self.today.month - 1) // 3, 1)} Retirement Benefits Committee Review",
+                review_period=f"Q{max((self.today.month - 1) // 3, 1)} FY{self.tax_year}-{str(self.tax_year+1)[-2:]}",
                 held_on=self.today - timedelta(days=38),
-                attendees=["Diane Ellis", "Marcus Webb", "Tobias Frank", "Priya Raman"],
+                attendees=["Deepa Krishnan", "Arjun Mehta", "Rajesh Bhatt", "Neha Kapoor"],
                 agenda=[
-                    "Review of the investment policy statement",
-                    "Fund performance against benchmarks and peers",
+                    "Review of the scheme investment policy",
+                    "Fund performance against benchmark and category peers",
                     "Watch-list discussion",
-                    "Fee benchmarking update",
-                    "Participant engagement metrics",
+                    "EPFO compliance and ECR filing status",
+                    "Employee engagement and nomination coverage",
                 ],
                 minutes=(
-                    "The committee reviewed all lineup options against the IPS criteria. Two funds were placed on "
-                    "watch for trailing three-year performance below benchmark and above-median expenses. The "
-                    "committee agreed to review both again next quarter before considering replacement."
+                    "The committee reviewed every scheme against the policy criteria. Two schemes were placed "
+                    "on watch for trailing three-year performance below benchmark and above-median expenses. "
+                    "The committee agreed to review both again next quarter before considering a change."
                 ),
                 decisions=[
-                    "Retain the current QDIA.",
-                    "Place Northmoor Large Growth and Cascade Small Cap Value on watch.",
+                    "Retain the current default scheme.",
+                    "Place HDFC Mid-Cap and SBI Small Cap on watch.",
                     "Request a recordkeeping fee benchmarking study.",
                 ],
                 funds_on_watch=2,
@@ -1693,10 +1711,10 @@ class DemoSeeder:
         assets = plan.total_assets or 1.0
         participants = plan.participating_employees or 1
         specs = [
-            ("Ironbridge Retirement Services", "recordkeeping", "participant", 0.0022, 0.0018, 0.0004, 4.2),
+            ("EPFO Administrative Charges", "recordkeeping", "sponsor", 0.0005, 0.0005, 0.0, 4.6),
             ("Nexgile Advisory", "advisory", "sponsor", 0.0018, 0.0020, 0.0, 4.7),
-            ("Whitlock & Reyes LLP", "audit", "sponsor", 0.0004, 0.0004, 0.0, 4.5),
-            ("Meridian Trust & Custody", "custody", "participant", 0.0006, 0.0005, 0.0001, 4.4),
+            ("Chandrasekhar & Rao Advocates", "audit", "sponsor", 0.0003, 0.0004, 0.0, 4.5),
+            ("NSDL / Protean e-Gov", "custody", "participant", 0.0004, 0.0005, 0.0001, 4.4),
         ]
         for vendor, fee_type, payer, bps, benchmark_bps, revenue_share, sla in specs:
             annual = assets * bps
@@ -1711,60 +1729,69 @@ class DemoSeeder:
                     basis_points=round(bps * 10_000, 2),
                     benchmark_basis_points=round(benchmark_bps * 10_000, 2),
                     revenue_sharing=round(assets * revenue_share, 2),
-                    contract_end=date(self.tax_year + 1, 6, 30),
+                    contract_end=date(self.tax_year + 2, 3, 31),
                     sla_score=sla,
-                    notes="Contract renewal window opens six months before the end date.",
+                    notes="Contract renewal window opens six months before the plan year end.",
                 )
             )
 
     def _seed_plan_compliance(self, plan: Plan) -> None:
+        from app.calculations import institutional as inst_calc
+
         participants = self.db.execute(select(Participant).where(Participant.plan_id == plan.id)).scalars().all()
-        hce = [p for p in participants if p.is_hce]
-        nhce = [p for p in participants if not p.is_hce]
-        hce_avg = round(sum(p.deferral_rate + p.roth_deferral_rate for p in hce) / max(len(hce), 1), 4)
-        nhce_avg = round(sum(p.deferral_rate + p.roth_deferral_rate for p in nhce) / max(len(nhce), 1), 4)
-        key_balances = sum(p.account_balance for p in hce)
-        total_balances = sum(p.account_balance for p in participants) or 1.0
+        total_wages = sum(p.annual_salary * 0.5 for p in participants)  # basic ~ 50% of CTC
+        employee_remitted = total_wages * 0.12
+        eps_remitted = min(total_wages, 15_000.0 * 12 * len(participants)) * 0.0833
+        employer_remitted = total_wages * 0.12 - eps_remitted
 
-        tests = [
-            ("ADP", hce_avg, nhce_avg, round(max(nhce_avg * 1.25, min(nhce_avg * 2, nhce_avg + 0.02)), 4), date(self.tax_year, 3, 15), date(self.tax_year, 2, 27)),
-            ("ACP", round(hce_avg * 0.82, 4), round(nhce_avg * 0.86, 4), round(nhce_avg * 1.25, 4), date(self.tax_year, 3, 15), date(self.tax_year, 2, 27)),
-            ("Top Heavy", round(key_balances, 2), round(total_balances, 2), 0.60, date(self.tax_year, 12, 31), None),
-            ("402(g) Limit", None, None, 24_500.0, date(self.tax_year, 4, 15), date(self.tax_year, 3, 30)),
-            ("415(c) Annual Additions", None, None, 71_000.0, date(self.tax_year, 12, 31), None),
-            ("Coverage 410(b)", round(len(participants) / max(plan.eligible_employees, 1), 4), 0.70, 0.70, date(self.tax_year, 12, 31), None),
-        ]
+        check = inst_calc.epf_contribution_check(
+            total_wages=total_wages,
+            employee_remitted=employee_remitted,
+            employer_remitted=employer_remitted,
+            eps_remitted=eps_remitted,
+            member_count=len(participants),
+            as_of=self.today,
+        ).result
 
-        for test_type, hce_value, nhce_value, threshold, due, completed in tests:
-            passed = True
-            if test_type == "ADP":
-                passed = hce_avg <= max(nhce_avg * 1.25, min(nhce_avg * 2, nhce_avg + 0.02)) + 1e-9
-            elif test_type == "Top Heavy":
-                passed = (key_balances / total_balances) <= 0.60
-            self.db.add(
-                ComplianceTest(
-                    plan_id=plan.id,
-                    test_type=test_type,
-                    tax_year=self.tax_year - 1 if completed else self.tax_year,
-                    hce_value=hce_value,
-                    nhce_value=nhce_value,
-                    threshold=threshold,
-                    result="pass" if passed else "fail",
-                    status=str(ComplianceStatus.COMPLETE if completed else ComplianceStatus.PENDING),
-                    due_date=due,
-                    completed_on=completed,
-                    corrective_action=None
-                    if passed
-                    else "Refund excess contributions to HCEs within 2.5 months of plan year end.",
-                    method="current_year_testing",
-                )
+        self.db.add(
+            ComplianceTest(
+                plan_id=plan.id,
+                test_type="EPF Contribution Reconciliation",
+                tax_year=self.tax_year,
+                hce_value=round(employee_remitted, 2),
+                nhce_value=round(check["expected_employee"], 2),
+                threshold=None,
+                result=check["result"],
+                status=str(ComplianceStatus.COMPLETE),
+                due_date=date(self.tax_year + 1, 3, 31),
+                completed_on=self.today,
+                corrective_action=check["corrective_action"],
+                method="epf_contribution_reconciliation",
             )
+        )
+
+        self.db.add(
+            ComplianceTest(
+                plan_id=plan.id,
+                test_type="Nomination Coverage",
+                tax_year=self.tax_year,
+                hce_value=round(sum(1 for p in participants if p.has_beneficiary) / max(len(participants), 1), 4),
+                nhce_value=0.95,
+                threshold=0.95,
+                result="pass" if sum(1 for p in participants if p.has_beneficiary) / max(len(participants), 1) >= 0.90 else "fail",
+                status=str(ComplianceStatus.PENDING),
+                due_date=date(self.tax_year + 1, 3, 31),
+                completed_on=None,
+                corrective_action="Follow up with members who have not filed a nomination.",
+                method="nomination_coverage_review",
+            )
+        )
 
         for filing_type, year, due, filed, preparer in (
-            ("form_5500", self.tax_year - 1, date(self.tax_year, 7, 31), date(self.tax_year, 7, 12), "Whitlock & Reyes LLP"),
-            ("form_5500", self.tax_year, date(self.tax_year + 1, 7, 31), None, "Whitlock & Reyes LLP"),
-            ("form_8955_ssa", self.tax_year - 1, date(self.tax_year, 7, 31), date(self.tax_year, 7, 12), "Ironbridge"),
-            ("summary_annual_report", self.tax_year - 1, date(self.tax_year, 9, 30), None, "Ironbridge"),
+            ("ecr_monthly", self.tax_year, date(self.today.year, self.today.month, 15), self.today - timedelta(days=3), "EPFO Portal"),
+            ("epf_annual_return", self.tax_year - 1, date(self.tax_year, 4, 30), date(self.tax_year, 4, 18), "Chandrasekhar & Rao Advocates"),
+            ("form_5_10", self.tax_year, date(self.tax_year + 1, 3, 31), None, "EPFO Portal"),
+            ("epf_audit", self.tax_year - 1, date(self.tax_year, 9, 30), date(self.tax_year, 9, 12), "Chandrasekhar & Rao Advocates"),
         ):
             self.db.add(
                 Filing(
@@ -1772,13 +1799,13 @@ class DemoSeeder:
                     filing_type=filing_type,
                     tax_year=year,
                     due_date=due,
-                    extended_due_date=due + timedelta(days=75) if filing_type == "form_5500" else None,
+                    extended_due_date=None,
                     filed_on=filed,
                     status=str(ComplianceStatus.COMPLETE if filed else ComplianceStatus.PENDING),
                     preparer=preparer,
-                    auditor="Whitlock & Reyes LLP" if filing_type == "form_5500" else None,
-                    notes="Independent audit required: plan has more than 100 eligible participants."
-                    if filing_type == "form_5500"
+                    auditor="Chandrasekhar & Rao Advocates" if "audit" in filing_type else None,
+                    notes="Monthly ECR filed through the EPFO employer portal by the 15th of the following month."
+                    if filing_type == "ecr_monthly"
                     else None,
                 )
             )
@@ -1786,11 +1813,12 @@ class DemoSeeder:
     # ------------------------------------------------------------------
     def seed_workflow(self) -> None:
         """Recommendations, approvals and a rebalance in each workflow state."""
-        advisor = self.users["marcus.webb@nexgile.example"]
-        tax_lead = self.users["hana.mori@nexgile.example"]
+        advisor = self.users["arjun.mehta@nexgile.example"]
+        tax_lead = self.users["meera.subramanian@nexgile.example"]
         # Investment recommendations are decided by the investment team; the
         # approval engine enforces the same separation of duties.
-        reviewer = self.users["tobias.frank@nexgile.example"]
+        reviewer = self.users["rajesh.bhatt@nexgile.example"]
+        estate_reviewer = self.users["vikram.chandrasekhar@nexgile.example"]
 
         for blueprint in HOUSEHOLDS:
             household = self.households[blueprint["key"]]
@@ -1808,52 +1836,56 @@ class DemoSeeder:
                     "title": "Reduce the concentrated equity position toward policy",
                     "category": "portfolio",
                     "severity": "high",
-                    "summary": "Trim the largest single holding back to the 10% policy guideline over two tax years.",
+                    "summary": "Trim the largest single holding back to the 10% policy guideline over two financial years.",
                     "rationale": "The position is the largest single source of portfolio risk and exceeds the investment policy limit.",
                     "action": "Stage the reduction, pairing sales with harvested losses to limit the tax cost.",
                     "impact": round(invested * 0.021, 2),
                     "impact_label": "Estimated proceeds to reallocate",
                     "status": ApprovalStatus.SUBMITTED,
                     "requested_by": advisor,
+                    "reviewer": reviewer,
                 },
                 {
-                    "title": "Harvest available losses before year end",
+                    "title": "Harvest available losses and gains before the financial year ends",
                     "category": "tax",
                     "severity": "medium",
-                    "summary": "Realise losses across the taxable accounts to offset gains of the same character.",
-                    "rationale": "Harvested losses offset realised gains and up to $3,000 of ordinary income, with the excess carried forward.",
-                    "action": "Approve the harvest set and hold replacements through the 31-day window.",
+                    "summary": "Realise losses to offset gains, and book long-term equity gains inside the section 112A exemption.",
+                    "rationale": "Harvested losses offset gains of the same character; the 112A exemption resets the cost base at no tax cost.",
+                    "action": "Approve the harvest set and repurchase immediately — India has no wash-sale rule.",
                     "impact": round(invested * 0.0042, 2),
                     "impact_label": "Estimated tax reduction",
                     "status": ApprovalStatus.APPROVED,
                     "requested_by": tax_lead,
+                    "reviewer": reviewer,
                 },
                 {
-                    "title": "Increase education funding contributions",
+                    "title": "Increase education SIP contributions",
                     "category": "goal",
                     "severity": "medium",
-                    "summary": "Raise the monthly contribution to close the projected education funding shortfall.",
+                    "summary": "Raise the monthly SIP to close the projected education funding shortfall.",
                     "rationale": "The goal is projected to fall short of its inflation-adjusted target on current assumptions.",
                     "action": "Compare the higher-savings scenario and adjust the funding plan.",
-                    "impact": 1_450.0,
-                    "impact_label": "Additional monthly contribution",
+                    "impact": 14_500.0,
+                    "impact_label": "Additional monthly SIP",
                     "status": ApprovalStatus.DRAFT,
                     "requested_by": advisor,
+                    "reviewer": reviewer,
                 },
                 {
-                    "title": "Complete outstanding beneficiary designations",
+                    "title": "Complete outstanding nominations",
                     "category": "estate",
                     "severity": "high",
-                    "summary": "One retirement account has no valid primary beneficiary on file.",
-                    "rationale": "Without a designation the account passes through probate rather than to the intended person.",
-                    "action": "Collect and file the designation form; route the change through review.",
+                    "summary": "One retirement account has no nomination on file.",
+                    "rationale": "Without a nomination the account requires a succession certificate before the family can claim it.",
+                    "action": "Collect and file the nomination form; route the change through review.",
                     "impact": None,
                     "impact_label": None,
                     "status": ApprovalStatus.COMPLETED,
                     "requested_by": advisor,
+                    "reviewer": estate_reviewer,
                 },
             ]
-            if blueprint["key"] != "johnson":
+            if blueprint["key"] != "sharma":
                 specs = specs[:2]
 
             for spec in specs:
@@ -1891,7 +1923,7 @@ class DemoSeeder:
                     status=str(spec["status"]),
                     priority="high" if spec["severity"] == "high" else "medium",
                     requested_by_id=spec["requested_by"].id,
-                    assigned_to_id=advisor.id,
+                    assigned_to_id=spec["reviewer"].id,
                     required_role=str(Role.ADVISOR),
                     estimated_impact=spec["impact"],
                     payload={"recommendation_id": recommendation.id, "category": spec["category"]},
@@ -1901,8 +1933,8 @@ class DemoSeeder:
                     approval.submitted_at = self.now - timedelta(days=6)
                 if spec["status"] in {ApprovalStatus.APPROVED, ApprovalStatus.COMPLETED}:
                     approval.decided_at = self.now - timedelta(days=3)
-                    approval.decided_by_id = reviewer.id
-                    approval.decision_note = "Reviewed against the investment policy and client objectives."
+                    approval.decided_by_id = spec["reviewer"].id
+                    approval.decision_note = "Reviewed against the investment policy and household objectives."
                 if spec["status"] == ApprovalStatus.COMPLETED:
                     approval.completed_at = self.now - timedelta(days=1)
                 self.db.add(approval)
@@ -1919,7 +1951,7 @@ class DemoSeeder:
                     ],
                 }[spec["status"]]
                 for offset, (from_status, to_status) in enumerate(history):
-                    actor = spec["requested_by"] if to_status in {"draft", "submitted"} else reviewer
+                    actor = spec["requested_by"] if to_status in {"draft", "submitted"} else spec["reviewer"]
                     self.db.add(
                         ApprovalEvent(
                             approval_id=approval.id,
@@ -1938,7 +1970,7 @@ class DemoSeeder:
                     )
 
             # A rebalance proposal awaiting review on the first two households.
-            if blueprint["key"] in {"johnson", "okonkwo"}:
+            if blueprint["key"] in {"sharma", "reddy"}:
                 rebalance = Rebalance(
                     household_id=household.id,
                     portfolio_id=portfolio.id,
@@ -1967,7 +1999,7 @@ class DemoSeeder:
                     status=str(ApprovalStatus.SUBMITTED),
                     priority="medium",
                     requested_by_id=advisor.id,
-                    assigned_to_id=self.users["tobias.frank@nexgile.example"].id,
+                    assigned_to_id=self.users["rajesh.bhatt@nexgile.example"].id,
                     required_role=str(Role.INVESTMENT_TEAM),
                     estimated_impact=rebalance.estimated_tax_cost,
                     payload={"rebalance_id": rebalance.id},
@@ -2020,8 +2052,8 @@ class DemoSeeder:
             targets,
             self.today,
             cash=service.cash_balance(household.id),
-            marginal_rate=client.marginal_tax_rate if client else 0.35,
-            ltcg_rate=client.ltcg_tax_rate if client else 0.20,
+            marginal_rate=client.marginal_tax_rate if client else 0.30,
+            ltcg_rate=client.ltcg_tax_rate if client else 0.125,
         )
         rebalance.max_drift = plan.result["max_drift"]
         rebalance.turnover_amount = plan.result["turnover_amount"]
@@ -2049,26 +2081,26 @@ class DemoSeeder:
 
     # ------------------------------------------------------------------
     def seed_notifications_and_audit(self) -> None:
-        advisor = self.users["marcus.webb@nexgile.example"]
-        compliance = self.users["priya.raman@nexgile.example"]
+        advisor = self.users["arjun.mehta@nexgile.example"]
+        compliance = self.users["neha.kapoor@nexgile.example"]
         client_users = [u for u in self.users.values() if u.role == Role.CLIENT]
         client_user = client_users[0] if client_users else None
 
         alert_specs = [
             ("portfolio", "high", "Concentration above policy limit", "A single holding exceeds the 10% single-position guideline.", "/portfolio"),
-            ("tax", "medium", "Harvesting candidates identified", "Loss positions are available to offset this year's realised gains.", "/tax"),
+            ("tax", "medium", "Harvesting candidates identified", "Loss and gain positions are available to reduce this year's tax.", "/tax"),
             ("goal", "medium", "Education goal is off track", "The projected balance falls short of the inflation-adjusted target.", "/goals"),
-            ("estate", "high", "Beneficiary designation missing", "One retirement account has no primary beneficiary on file.", "/estate"),
-            ("document", "low", "Document expiring in 62 days", "The umbrella liability policy is approaching its expiration date.", "/documents"),
+            ("estate", "high", "Nomination missing", "One retirement account has no nomination on file.", "/estate"),
+            ("document", "low", "Document expiring in 62 days", "The health insurance policy is approaching its renewal date.", "/documents"),
             ("meeting", "info", "Quarterly review scheduled", "Your next portfolio review is on the calendar.", "/meetings"),
             ("approval", "medium", "Approval awaiting your review", "A recommendation has been submitted for review.", "/approvals"),
         ]
 
         for blueprint in HOUSEHOLDS:
             household = self.households[blueprint["key"]]
-            recipients = [advisor] + ([client_user] if blueprint["key"] == "johnson" and client_user else [])
+            recipients = [advisor] + ([client_user] if blueprint["key"] == "sharma" and client_user else [])
             for index, (category, severity, title, body, url) in enumerate(alert_specs):
-                if blueprint["key"] != "johnson" and index > 3:
+                if blueprint["key"] != "sharma" and index > 3:
                     continue
                 for recipient in recipients:
                     self.db.add(
@@ -2086,12 +2118,12 @@ class DemoSeeder:
                     )
 
         # Plan-level notifications for the sponsor and compliance workspaces.
-        sponsor_user = self.users["diane.ellis@brightpath.example"]
+        sponsor_user = self.users["deepa.krishnan@brightpath.example"]
         plan = self.db.execute(select(Plan).order_by(Plan.name)).scalars().first()
         for category, severity, title, body, url in (
-            ("compliance", "high", "Form 5500 filing due", "The current plan-year filing has not yet been submitted.", "/compliance"),
-            ("plan", "medium", "Two funds on the watch list", "The investment committee placed two options on watch.", "/institutional/investments"),
-            ("plan", "info", "Participation rate improved", "Participation increased following the auto-enrolment sweep.", "/institutional"),
+            ("compliance", "high", "Monthly ECR due", "The current month's Electronic Challan cum Return has not yet been filed.", "/compliance"),
+            ("plan", "medium", "Two schemes on the watch list", "The retirement benefits committee placed two schemes on watch.", "/institutional/investments"),
+            ("plan", "info", "Participation improved", "Contribution rates increased following the auto-escalation sweep.", "/institutional"),
         ):
             for recipient in (sponsor_user, compliance):
                 self.db.add(
@@ -2109,16 +2141,16 @@ class DemoSeeder:
         # Audit history so the trail is populated from the first page load.
         audit_specs = [
             ("login", "session", "Signed in", advisor, "success"),
-            ("document_upload", "document", "2025_Tax_Return.pdf", advisor, "success"),
+            ("document_upload", "document", "Form16_AY2025-26.pdf", advisor, "success"),
             ("recommendation_created", "recommendation", "Reduce the concentrated equity position toward policy", advisor, "success"),
             ("approval_submitted", "approval", "Reduce the concentrated equity position toward policy", advisor, "success"),
-            ("approval_reviewed", "approval", "Harvest available losses before year end", compliance, "success"),
-            ("approval_decided", "approval", "Harvest available losses before year end", compliance, "success"),
+            ("approval_reviewed", "approval", "Harvest available losses and gains before the financial year ends", compliance, "success"),
+            ("approval_decided", "approval", "Harvest available losses and gains before the financial year ends", compliance, "success"),
             ("rebalance_created", "rebalance", "Rebalance to policy", advisor, "success"),
-            ("beneficiary_change", "beneficiary", "Beneficiary designation updated", advisor, "success"),
-            ("scenario_run", "goal", "Retirement at 65", advisor, "success"),
+            ("beneficiary_change", "beneficiary", "Nomination updated", advisor, "success"),
+            ("scenario_run", "goal", "Retirement at 60", advisor, "success"),
             ("report_generated", "report", "Quarterly Review", advisor, "success"),
-            ("compliance_action", "compliance_test", "ADP test 2025", compliance, "success"),
+            ("compliance_action", "compliance_test", "EPF Contribution Reconciliation FY2025-26", compliance, "success"),
             ("login_failed", "session", "unknown@example.com", None, "failed"),
         ]
         for house_index, blueprint in enumerate(HOUSEHOLDS):
@@ -2135,7 +2167,7 @@ class DemoSeeder:
                         entity_label=label,
                         status=status,
                         summary=f"{action.replace('_', ' ').capitalize()} — {label}",
-                        ip_address="198.51.100." + str(20 + index),
+                        ip_address="103.21.244." + str(20 + index),
                         created_at=self.now - timedelta(days=index + house_index, hours=index * 2),
                     )
                 )

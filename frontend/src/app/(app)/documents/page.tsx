@@ -16,7 +16,7 @@ import {
   FileText,
   Pencil,
   Search,
-  Sparkles,
+  Tag,
   Upload,
   X,
 } from "lucide-react";
@@ -266,7 +266,7 @@ export default function DocumentsPage() {
                       <Badge tone="outline">{titleCase(document.category)}</Badge>
                       {document.classification ? (
                         <Badge tone="primary" size="sm">
-                          <Sparkles className="size-3" />
+                          <Tag className="size-3" />
                           {Math.round(document.classification.confidence * 100)}%
                         </Badge>
                       ) : null}
@@ -326,7 +326,7 @@ function DocumentDrawer({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="flex items-center gap-1.5 text-sm font-semibold text-ink">
-                  <Sparkles className="size-4 text-primary" aria-hidden />
+                  <Tag className="size-4 text-primary" aria-hidden />
                   Suggested filing
                 </p>
                 <p className="mt-1 text-xs leading-relaxed text-ink-muted">{classification.note}</p>

@@ -1,12 +1,18 @@
-"""Tax Center (§15) and the tax-loss harvesting workflow (§24).
+"""Tax Center (§15) and the tax-loss/gain harvesting workflow (§24).
 
-Nothing here places a trade. An opportunity becomes an action only after review,
-recommendation, approval and an explicitly simulated execution step.
+Nothing here places a trade or files a return. An opportunity becomes an
+action only after review, recommendation, approval and an explicitly
+simulated execution step.
+
+India has no wash-sale rule, so harvesting a loss and immediately
+repurchasing is legitimate; the same is true of harvesting a long-term
+equity gain inside the unused section 112A exemption. Both are surfaced
+side by side by `app.calculations.tax.harvest_opportunities`.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -16,15 +22,15 @@ from app.audit.service import AuditAction, AuditService
 from app.calculations import tax as calc
 from app.core.constants import ApprovalStatus, EntityType, Role
 from app.core.errors import ConflictError, NotFoundError, ValidationError
-from app.models.estate import Gift
 from app.models.identity import Client, User
-from app.models.tax import RMD, Harvest, TaxOpportunity, WashSaleWindow
+from app.models.tax import Harvest, NpsAnnuitization, TaxOpportunity
 from app.models.wealth import Account, Holding, Security, TaxLot, Transaction
 from app.models.workflow import Approval
 from app.workflows.approval_engine import ApprovalEngine
 
-MINIMUM_HARVEST_LOSS = 1000.0
-DEFAULT_GAIN_BUDGET = 250_000.0
+MINIMUM_HARVEST_LOSS = 25_000.0
+MINIMUM_HARVEST_GAIN = 10_000.0
+DEFAULT_GAIN_BUDGET = 5_00_000.0
 
 
 class TaxService:
@@ -39,11 +45,12 @@ class TaxService:
             select(Client).where(Client.household_id == household_id).order_by(Client.created_at)
         ).scalars().first()
 
-    def _rates(self, household_id: str) -> tuple[float, float, float]:
+    def _rates(self, household_id: str) -> tuple[float, float]:
+        """(marginal slab rate, long-term equity capital gains rate)."""
         client = self._primary_client(household_id)
         if not client:
-            return 0.35, 0.20, 0.05
-        return client.marginal_tax_rate, client.ltcg_tax_rate, client.state_tax_rate
+            return 0.30, calc.LTCG_EQUITY_RATE
+        return client.marginal_tax_rate, client.ltcg_tax_rate
 
     def _open_lots(self, household_id: str) -> list[dict[str, Any]]:
         rows = self.db.execute(
@@ -51,10 +58,9 @@ class TaxService:
             .join(Holding, TaxLot.holding_id == Holding.id)
             .join(Security, Holding.security_id == Security.id)
             .join(Account, Holding.account_id == Account.id)
-            .where(Account.household_id == household_id, TaxLot.is_open.is_(True))
+            .where(Account.household_id == household_id, TaxLot.is_open.is_(True), Account.tax_treatment == "taxable")
         ).all()
 
-        blocked = self._active_wash_windows(household_id)
         lots = []
         for lot, holding, security, account in rows:
             replacement = self._replacement_for(security)
@@ -67,11 +73,11 @@ class TaxService:
                     "account_name": account.name,
                     "symbol": security.symbol,
                     "name": security.name,
+                    "asset_class": security.asset_class,
                     "quantity": lot.quantity,
                     "cost_per_share": lot.cost_per_share,
                     "price": security.last_price,
                     "acquired_on": lot.acquired_on,
-                    "wash_sale_risk": "blocked" if (account.id, security.id) in blocked else "clear",
                     "replacement_symbol": replacement.symbol if replacement else None,
                     "replacement_security_id": replacement.id if replacement else None,
                     "tax_treatment": account.tax_treatment,
@@ -79,21 +85,12 @@ class TaxService:
             )
         return lots
 
-    def _active_wash_windows(self, household_id: str) -> set[tuple[str, str]]:
-        rows = self.db.execute(
-            select(WashSaleWindow, Account)
-            .join(Account, WashSaleWindow.account_id == Account.id)
-            .where(Account.household_id == household_id, WashSaleWindow.is_active.is_(True))
-        ).all()
-        today = date.today()
-        return {
-            (window.account_id, window.security_id)
-            for window, _ in rows
-            if window.window_start <= today <= window.window_end
-        }
-
     def _replacement_for(self, security: Security) -> Security | None:
-        """A same-exposure, not substantially identical, alternative."""
+        """A same-exposure, not substantially identical, alternative.
+
+        India has no wash-sale rule, so this is offered purely for style
+        continuity while the household is briefly out of the position.
+        """
         return self.db.execute(
             select(Security)
             .where(
@@ -108,34 +105,49 @@ class TaxService:
 
     # -- overview -----------------------------------------------------
     def overview(self, household_id: str, as_of: date, tax_year: int | None = None) -> dict[str, Any]:
-        tax_year = tax_year or as_of.year
-        marginal, ltcg, state = self._rates(household_id)
+        tax_year = tax_year or calc.financial_year_bounds(as_of)[0].year
+        client = self._primary_client(household_id)
+        marginal, ltcg = self._rates(household_id)
+        total_income = client.annual_income if client else 0.0
 
         transactions = self.db.execute(
-            select(Transaction)
+            select(Transaction, Security)
             .join(Account, Transaction.account_id == Account.id)
+            .outerjoin(Security, Transaction.security_id == Security.id)
             .where(Account.household_id == household_id)
-        ).scalars().all()
+        ).all()
         realized = calc.realized_gains(
             [
-                {"trade_date": t.trade_date, "realized_gain": t.realized_gain, "is_long_term": t.is_long_term}
-                for t in transactions
+                {
+                    "trade_date": t.trade_date,
+                    "realized_gain": t.realized_gain,
+                    "is_long_term": t.is_long_term,
+                    "asset_class": s.asset_class if s else "indian_equity",
+                }
+                for t, s in transactions
             ],
-            tax_year,
             as_of,
         ).to_dict()
+        rg = realized["result"]
 
-        estimate = calc.estimate_tax_on_gains(
-            realized["result"]["short_term_gain"],
-            realized["result"]["long_term_gain"],
-            marginal,
-            ltcg,
-            state,
-            as_of,
+        estimate = calc.estimate_capital_gains_tax(
+            equity_stcg=rg["equity_stcg"],
+            equity_ltcg=rg["equity_ltcg"],
+            other_stcg=rg["other_stcg"],
+            other_ltcg=rg["other_ltcg"],
+            slab_rate=marginal,
+            total_income=total_income,
+            as_of=as_of,
         ).to_dict()
 
+        exemption_remaining = float(estimate["result"]["exemption_remaining"])
         harvest = calc.harvest_opportunities(
-            self._open_lots(household_id), marginal, ltcg, state, as_of, minimum_loss=MINIMUM_HARVEST_LOSS
+            self._open_lots(household_id),
+            slab_rate=marginal,
+            ltcg_exemption_remaining=exemption_remaining,
+            as_of=as_of,
+            minimum_loss=MINIMUM_HARVEST_LOSS,
+            minimum_gain=MINIMUM_HARVEST_GAIN,
         ).to_dict()
 
         positions = self.db.execute(
@@ -157,34 +169,111 @@ class TaxService:
                 }
                 for h, s, a in positions
             ],
+            marginal,
             as_of,
         ).to_dict()
 
         budget = calc.capital_gains_budget(
-            realized["result"]["net_gain"], DEFAULT_GAIN_BUDGET, 0.0, as_of
+            realized_net=rg["net_gain"], budget=DEFAULT_GAIN_BUDGET, pending_gains=0.0, as_of=as_of
         ).to_dict()
 
-        municipal_income = sum(
-            h.quantity * s.last_price * (s.dividend_yield or 0) for h, s, _ in positions if s.is_municipal
+        tax_free_income = sum(
+            h.quantity * s.last_price * (s.dividend_yield or 0) for h, s, _ in positions if s.is_tax_free
         )
+
+        regime = calc.compare_regimes(
+            gross_income=total_income,
+            deductions=self._estimated_chapter_via_total(household_id, client),
+            age=self._age(client, as_of),
+            as_of=as_of,
+        ).to_dict() if client else None
+
+        advance_tax = calc.advance_tax_schedule(
+            estimated_annual_tax=estimate["result"]["total_tax"]
+            + (regime["result"]["new_regime_tax"] if regime else 0.0),
+            tax_paid=0.0,
+            as_of=as_of,
+        ).to_dict()
 
         return {
             "tax_year": tax_year,
+            "financial_year": calc.financial_year(as_of),
             "as_of": as_of.isoformat(),
-            "rates": {"marginal": marginal, "long_term_capital_gains": ltcg, "state": state},
+            "rates": {"marginal": marginal, "long_term_capital_gains": ltcg, "regime": client.tax_regime if client else "new"},
             "realized_gains": realized,
             "tax_estimate": estimate,
             "harvest": harvest,
             "asset_location": location,
             "capital_gains_budget": budget,
-            "municipal_income": round(municipal_income, 2),
+            "tax_free_income": round(tax_free_income, 2),
             "opportunities": self.opportunities(household_id, tax_year),
-            "rmd": self.rmd_status(household_id, tax_year, as_of),
-            "roth_conversion": self.roth_analysis(household_id, as_of),
-            "wash_sale_windows": self.wash_sale_windows(household_id),
+            "nps_annuitization": self.nps_annuitization_status(household_id, tax_year),
+            "regime_comparison": regime,
+            "advance_tax": advance_tax,
             "charitable_securities": self.charitable_securities(household_id, tax_year),
             "projection": self.projection(household_id, as_of, tax_year),
         }
+
+    def _age(self, client: Client | None, as_of: date) -> int:
+        if not client or not client.birth_date:
+            return 35
+        return as_of.year - client.birth_date.year
+
+    def _estimated_chapter_via_total(self, household_id: str, client: Client | None) -> float:
+        """A planning estimate of Chapter VI-A deductions from linked accounts.
+
+        Actual contributions are not itemised per client, so headroom on the
+        big-ticket sections (80C via EPF/PPF, 80D) is estimated from account
+        presence and typical usage. This keeps the regime comparison useful
+        without requiring a separate data-entry flow.
+        """
+        if not client:
+            return 0.0
+        accounts = self.db.execute(
+            select(Account).where(Account.household_id == household_id, Account.is_liability.is_(False))
+        ).scalars().all()
+        has_epf = any(a.account_type == "epf" for a in accounts)
+        has_ppf = any(a.account_type == "ppf" for a in accounts)
+        home_loan = self.db.execute(
+            select(Account).where(Account.household_id == household_id, Account.account_type == "home_loan")
+        ).scalars().first()
+
+        eighty_c = calc.SECTION_80C_LIMIT if (has_epf or has_ppf) else 0.0
+        section_24b = min((home_loan.balance * (home_loan.interest_rate or 0.08)), calc.SECTION_24B_LIMIT) if home_loan else 0.0
+        health = calc.SECTION_80D_SELF_LIMIT
+        return round(eighty_c + section_24b + health, 2)
+
+    def chapter_via_summary(self, household_id: str, as_of: date) -> dict[str, Any]:
+        """Detailed section-by-section Chapter VI-A view for the tax page."""
+        client = self._primary_client(household_id)
+        accounts = self.db.execute(
+            select(Account).where(Account.household_id == household_id, Account.is_liability.is_(False))
+        ).scalars().all()
+        epf_account = next((a for a in accounts if a.account_type == "epf"), None)
+        ppf_account = next((a for a in accounts if a.account_type == "ppf"), None)
+        sukanya_account = next((a for a in accounts if a.account_type == "sukanya"), None)
+        home_loan = self.db.execute(
+            select(Account).where(Account.household_id == household_id, Account.account_type == "home_loan")
+        ).scalars().first()
+
+        income = client.annual_income if client else 0.0
+        return calc.chapter_via_summary(
+            epf_contribution=min(income * 0.06, calc.SECTION_80C_LIMIT) if epf_account else 0.0,
+            ppf_contribution=calc.PPF_ANNUAL_LIMIT if ppf_account else 0.0,
+            elss_investment=0.0,
+            life_insurance_premium=0.0,
+            home_loan_principal=0.0,
+            sukanya_contribution=calc.SUKANYA_ANNUAL_LIMIT if sukanya_account else 0.0,
+            tuition_fees=0.0,
+            nps_additional=0.0,
+            health_insurance_premium=calc.SECTION_80D_SELF_LIMIT,
+            home_loan_interest=min((home_loan.balance * (home_loan.interest_rate or 0.08)), calc.SECTION_24B_LIMIT)
+            if home_loan
+            else 0.0,
+            savings_interest=0.0,
+            age=self._age(client, as_of),
+            as_of=as_of,
+        ).to_dict()
 
     def opportunities(self, household_id: str, tax_year: int | None = None) -> list[dict[str, Any]]:
         stmt = select(TaxOpportunity).where(TaxOpportunity.household_id == household_id)
@@ -209,129 +298,62 @@ class TaxService:
             for row in rows
         ]
 
-    def wash_sale_windows(self, household_id: str) -> list[dict[str, Any]]:
+    def nps_annuitization_status(self, household_id: str, tax_year: int) -> dict[str, Any]:
+        """NPS exit annuitization: at least 40% of the corpus buys an annuity.
+
+        Tracked the way a US platform tracks a required minimum distribution —
+        a statutory, deadline-driven event against a retirement account.
+        """
         rows = self.db.execute(
-            select(WashSaleWindow, Account, Security)
-            .join(Account, WashSaleWindow.account_id == Account.id)
-            .join(Security, WashSaleWindow.security_id == Security.id)
-            .where(Account.household_id == household_id)
-            .order_by(WashSaleWindow.window_end.desc())
-        ).all()
-        today = date.today()
-        return [
-            {
-                "id": window.id,
-                "account_name": account.name,
-                "symbol": security.symbol,
-                "security_name": security.name,
-                "window_start": window.window_start.isoformat(),
-                "window_end": window.window_end.isoformat(),
-                "reason": window.reason,
-                "is_active": window.is_active and window.window_start <= today <= window.window_end,
-                "days_remaining": max((window.window_end - today).days, 0),
-            }
-            for window, account, security in rows
-        ]
+            select(NpsAnnuitization)
+            .join(Client, NpsAnnuitization.client_id == Client.id)
+            .where(Client.household_id == household_id, NpsAnnuitization.tax_year == tax_year)
+        ).scalars().all()
 
-    def check_wash_sale(self, household_id: str, security_id: str, sale_date: date | None = None) -> dict[str, Any]:
-        security = self.db.get(Security, security_id)
-        if not security:
-            raise NotFoundError("Security not found.")
-        sale_date = sale_date or date.today()
-
-        purchases = self.db.execute(
-            select(Transaction, Security)
-            .join(Account, Transaction.account_id == Account.id)
-            .join(Security, Transaction.security_id == Security.id)
-            .where(Account.household_id == household_id, Transaction.transaction_type == "buy")
-        ).all()
-
-        identical = [security.substantially_identical_to] if security.substantially_identical_to else []
-        identical += [
-            s.symbol
-            for s in self.db.execute(
-                select(Security).where(Security.substantially_identical_to == security.symbol)
-            ).scalars().all()
-        ]
-
-        return calc.wash_sale_check(
-            security.symbol,
-            sale_date,
-            [{"symbol": s.symbol, "trade_date": t.trade_date, "quantity": t.quantity} for t, s in purchases],
-            [s for s in identical if s],
-        ).to_dict()
-
-    def rmd_status(self, household_id: str, tax_year: int, as_of: date) -> dict[str, Any]:
-        client = self._primary_client(household_id)
-        rows = (
-            self.db.execute(
-                select(RMD).join(Client, RMD.client_id == Client.id).where(
-                    Client.household_id == household_id, RMD.tax_year == tax_year
-                )
-            ).scalars().all()
-            if client
-            else []
-        )
-        required = sum(r.required_amount for r in rows)
-        distributed = sum(r.distributed_amount for r in rows)
-        age = None
-        if client and client.birth_date:
-            age = as_of.year - client.birth_date.year
-
-        calculation = (
-            calc.rmd_amount(age, rows[0].prior_year_end_balance, tax_year, as_of).to_dict()
-            if rows and age
-            else None
-        )
+        required = sum(r.required_annuity_amount for r in rows)
+        purchased = sum(r.annuity_purchased_amount for r in rows)
 
         return {
             "required_amount": round(required, 2),
-            "distributed_amount": round(distributed, 2),
-            "remaining": round(max(required - distributed, 0.0), 2),
-            "deadline": date(tax_year, 12, 31).isoformat(),
+            "purchased_amount": round(purchased, 2),
+            "remaining": round(max(required - purchased, 0.0), 2),
             "is_required": required > 0,
-            "status": "satisfied" if required and distributed >= required else ("pending" if required else "not_applicable"),
+            "status": "satisfied" if required and purchased >= required else ("pending" if required else "not_applicable"),
             "accounts": [
                 {
                     "id": r.id,
                     "account_id": r.account_id,
-                    "required_amount": round(r.required_amount, 2),
-                    "distributed_amount": round(r.distributed_amount, 2),
-                    "life_expectancy_factor": r.life_expectancy_factor,
-                    "prior_year_end_balance": round(r.prior_year_end_balance, 2),
-                    "satisfied_by_qcd": round(r.satisfied_by_qcd, 2),
+                    "corpus_at_exit": round(r.corpus_at_exit, 2),
+                    "required_annuity_amount": round(r.required_annuity_amount, 2),
+                    "annuity_purchased_amount": round(r.annuity_purchased_amount, 2),
+                    "exit_deadline": r.exit_deadline.isoformat(),
                     "status": r.status,
-                    "method": r.method,
+                    "annuity_provider": r.annuity_provider,
                 }
                 for r in rows
             ],
-            "calculation": calculation,
         }
 
-    def roth_analysis(self, household_id: str, as_of: date, amount: float | None = None) -> dict[str, Any]:
+    def regime_comparison(self, household_id: str, as_of: date, gross_income: float | None = None) -> dict[str, Any]:
+        """Old vs. new regime — chosen afresh each financial year."""
         client = self._primary_client(household_id)
-        if not client:
-            return {}
-        years = max(client.retirement_age - (as_of.year - client.birth_date.year), 0) if client.birth_date else 10
-        conversion = amount or 100_000.0
-        return calc.roth_conversion(
-            conversion,
-            client.marginal_tax_rate,
-            max(client.marginal_tax_rate - 0.05, 0.10),
-            years,
-            0.06,
-            as_of,
+        income = gross_income if gross_income is not None else (client.annual_income if client else 0.0)
+        return calc.compare_regimes(
+            gross_income=income,
+            deductions=self._estimated_chapter_via_total(household_id, client),
+            age=self._age(client, as_of),
+            as_of=as_of,
         ).to_dict()
 
     def charitable_securities(self, household_id: str, tax_year: int) -> list[dict[str, Any]]:
-        """Long-term appreciated positions that make efficient charitable gifts."""
+        """Long-term appreciated positions that make efficient charitable gifts under section 80G."""
         rows = self.db.execute(
             select(Holding, Security, Account)
             .join(Security, Holding.security_id == Security.id)
             .join(Account, Holding.account_id == Account.id)
             .where(Account.household_id == household_id, Account.tax_treatment == "taxable")
         ).all()
-        _, ltcg, state = self._rates(household_id)
+        _, ltcg = self._rates(household_id)
         today = date.today()
 
         candidates = []
@@ -352,7 +374,7 @@ class TaxService:
                     "gain_percent": round(gain / (holding.quantity * holding.average_cost), 4)
                     if holding.average_cost
                     else 0,
-                    "capital_gains_tax_avoided": round(gain * (ltcg + state), 2),
+                    "capital_gains_tax_avoided": round(gain * ltcg * (1 + calc.HEALTH_EDUCATION_CESS), 2),
                     "holding_period": "long_term",
                 }
             )
@@ -362,43 +384,61 @@ class TaxService:
     def projection(self, household_id: str, as_of: date, tax_year: int) -> dict[str, Any]:
         """Year-end tax picture: realised to date, plus estimated remaining."""
         client = self._primary_client(household_id)
-        marginal, ltcg, state = self._rates(household_id)
+        marginal, ltcg = self._rates(household_id)
         income = client.annual_income if client else 0.0
 
         transactions = self.db.execute(
-            select(Transaction)
+            select(Transaction, Security)
             .join(Account, Transaction.account_id == Account.id)
+            .outerjoin(Security, Transaction.security_id == Security.id)
             .where(Account.household_id == household_id)
-        ).scalars().all()
+        ).all()
         realized = calc.realized_gains(
             [
-                {"trade_date": t.trade_date, "realized_gain": t.realized_gain, "is_long_term": t.is_long_term}
-                for t in transactions
+                {
+                    "trade_date": t.trade_date,
+                    "realized_gain": t.realized_gain,
+                    "is_long_term": t.is_long_term,
+                    "asset_class": s.asset_class if s else "indian_equity",
+                }
+                for t, s in transactions
             ],
-            tax_year,
             as_of,
         ).result
 
-        gains_tax = calc.estimate_tax_on_gains(
-            realized["short_term_gain"], realized["long_term_gain"], marginal, ltcg, state, as_of
+        gains_tax = calc.estimate_capital_gains_tax(
+            equity_stcg=realized["equity_stcg"],
+            equity_ltcg=realized["equity_ltcg"],
+            other_stcg=realized["other_stcg"],
+            other_ltcg=realized["other_ltcg"],
+            slab_rate=marginal,
+            total_income=income,
+            as_of=as_of,
         ).result
-        ordinary_tax = income * marginal
-        state_tax = income * state
+
+        income_tax = calc.slab_tax(
+            gross_income=income,
+            regime=client.tax_regime if client else "new",
+            deductions=self._estimated_chapter_via_total(household_id, client),
+            age=self._age(client, as_of),
+            as_of=as_of,
+        ).result
 
         return {
             "tax_year": tax_year,
-            "estimated_ordinary_income_tax": round(ordinary_tax, 2),
-            "estimated_state_tax": round(state_tax, 2),
+            "financial_year": calc.financial_year(as_of),
+            "regime": client.tax_regime if client else "new",
+            "estimated_income_tax": income_tax["total_tax"],
             "estimated_capital_gains_tax": gains_tax["total_tax"],
-            "estimated_total_tax": round(ordinary_tax + state_tax + gains_tax["total_tax"], 2),
+            "estimated_total_tax": round(income_tax["total_tax"] + gains_tax["total_tax"], 2),
             "effective_rate": round(
-                (ordinary_tax + state_tax + gains_tax["total_tax"]) / income, 4
+                (income_tax["total_tax"] + gains_tax["total_tax"]) / income, 4
             ) if income else 0.0,
             "assumptions": [
-                "A flat marginal rate is applied to ordinary income rather than bracket-by-bracket calculation.",
-                "Deductions, credits, AMT and the net investment income tax are not modelled.",
+                "Chapter VI-A deductions are estimated from linked accounts, not itemised entries.",
+                "House property income, HRA and other exempt allowances are not modelled.",
             ],
-            "limitations": ["A planning estimate only. It is not a tax return calculation or tax advice."],
+            "limitations": ["A planning estimate only. It is not a computation of your income tax return."],
         }
 
     # -- harvesting workflow (§24) ------------------------------------
@@ -426,13 +466,11 @@ class TaxService:
             "quantity": round(harvest.quantity, 4),
             "cost_basis": round(harvest.cost_basis, 2),
             "market_value": round(harvest.market_value, 2),
+            # Positive for a gain-harvest row, negative for a loss-harvest row.
             "unrealized_loss": round(harvest.unrealized_loss, 2),
+            "strategy": "harvest_gain" if harvest.unrealized_loss >= 0 else "harvest_loss",
             "holding_period": harvest.holding_period,
             "estimated_tax_benefit": round(harvest.estimated_tax_benefit, 2),
-            "wash_sale_risk": harvest.wash_sale_risk,
-            "wash_sale_window_ends": harvest.wash_sale_window_ends.isoformat()
-            if harvest.wash_sale_window_ends
-            else None,
             "replacement_security_id": harvest.replacement_security_id,
             "replacement_symbol": replacement.symbol if replacement else None,
             "replacement_name": replacement.name if replacement else None,
@@ -445,7 +483,7 @@ class TaxService:
         }
 
     def create_harvest(self, household_id: str, lot_id: str, actor: User, as_of: date) -> dict[str, Any]:
-        """Turn an identified opportunity into a reviewable proposal."""
+        """Turn an identified loss-harvest opportunity into a reviewable proposal."""
         lot = self.db.get(TaxLot, lot_id)
         if not lot:
             raise NotFoundError("Tax lot not found.")
@@ -467,14 +505,17 @@ class TaxService:
         cost_basis = lot.quantity * lot.cost_per_share
         loss = market_value - cost_basis
         if loss >= 0:
-            raise ValidationError("This lot holds an unrealised gain, not a loss; it cannot be harvested.")
+            raise ValidationError("This lot holds an unrealised gain, not a loss; it cannot be loss-harvested.")
 
-        marginal, ltcg, state = self._rates(household_id)
-        period = calc.holding_period(lot.acquired_on, as_of)
-        rate = ltcg if period == "long_term" else marginal
-        benefit = abs(loss) * (rate + state)
+        marginal, _ = self._rates(household_id)
+        period = calc.holding_period(lot.acquired_on, as_of, security.asset_class)
+        is_equity = security.asset_class in {"indian_equity", "intl_equity"}
+        if is_equity:
+            rate = calc.STCG_EQUITY_RATE if period == "short_term" else calc.LTCG_EQUITY_RATE
+        else:
+            rate = marginal if period == "short_term" else calc.LTCG_OTHER_RATE
+        benefit = abs(loss) * rate * (1 + calc.HEALTH_EDUCATION_CESS)
 
-        wash = self.check_wash_sale(household_id, security.id, as_of)
         replacement = self._replacement_for(security)
 
         harvest = Harvest(
@@ -489,11 +530,12 @@ class TaxService:
             unrealized_loss=loss,
             holding_period=period,
             estimated_tax_benefit=benefit,
-            wash_sale_risk=wash["result"]["risk"],
-            wash_sale_window_ends=as_of + timedelta(days=30),
+            wash_sale_risk="clear",  # India has no wash-sale rule.
+            wash_sale_window_ends=None,
             status="proposed",
-            tax_year=as_of.year,
-            notes=f"Replacement candidate: {replacement.symbol if replacement else 'none identified'}",
+            tax_year=calc.financial_year_bounds(as_of)[0].year,
+            notes=f"Replacement candidate: {replacement.symbol if replacement else 'none identified'}. "
+            "India has no wash-sale rule; a repurchase immediately after the sale is permitted.",
         )
         self.db.add(harvest)
         self.db.flush()
@@ -503,14 +545,14 @@ class TaxService:
             entity_id=harvest.id,
             title=f"Harvest {security.symbol} loss in {account.name}",
             summary=(
-                f"Realise a {abs(loss):,.0f} loss for an estimated {benefit:,.0f} tax benefit, "
+                f"Realise a Rs {abs(loss):,.0f} loss for an estimated Rs {benefit:,.0f} tax benefit, "
                 f"replacing with {replacement.symbol if replacement else 'cash'}."
             ),
             household_id=household_id,
             requested_by=actor,
             required_role=Role.TAX_SPECIALIST,
             priority="medium",
-            payload={"harvest_id": harvest.id, "wash_sale": wash["result"]},
+            payload={"harvest_id": harvest.id},
             estimated_impact=benefit,
             status=ApprovalStatus.DRAFT,
             commit=False,
@@ -545,16 +587,6 @@ class TaxService:
         harvest.is_simulated = True
 
         security = self.db.get(Security, harvest.security_id)
-        self.db.add(
-            WashSaleWindow(
-                account_id=harvest.account_id,
-                security_id=harvest.security_id,
-                window_start=date.today() - timedelta(days=30),
-                window_end=date.today() + timedelta(days=30),
-                reason="Loss realised; repurchase within 30 days would trigger a wash sale",
-                is_active=True,
-            )
-        )
 
         if harvest.approval_id:
             approval = self.db.get(Approval, harvest.approval_id)
@@ -570,7 +602,10 @@ class TaxService:
             entity_label=f"{security.symbol if security else 'harvest'} executed (simulated)",
             actor=actor,
             household_id=harvest.household_id,
-            summary="Harvest executed in simulation; no order was sent to a custodian.",
+            summary=(
+                "Harvest executed in simulation; no order was sent to a custodian. India has no wash-sale "
+                "rule, so the replacement position may be repurchased immediately."
+            ),
             before={"status": "approved"},
             after={"status": "executed", "simulated": True},
             commit=False,

@@ -10,8 +10,8 @@ import {
   CalendarDays,
   ChevronRight,
   Layers,
+  Radar,
   Scale,
-  Sparkles,
   Target,
   TrendingUp,
   Wallet,
@@ -80,7 +80,7 @@ export default function DashboardPage() {
                     </Link>
                     <Link href="/wealthagent">
                       <Button variant="primary" size="sm">
-                        <Sparkles />
+                        <Radar />
                         Ask WealthAgent
                       </Button>
                     </Link>
@@ -486,7 +486,7 @@ function WealthAgentPanel({ dashboard }: { dashboard: DashboardPayload }) {
       <CardHeader
         title={
           <span className="flex items-center gap-2">
-            <Sparkles className="size-4 text-primary" aria-hidden />
+            <Radar className="size-4 text-primary" aria-hidden />
             WealthAgent
           </span>
         }

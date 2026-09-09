@@ -428,11 +428,11 @@ def income_projection(positions: Sequence[dict[str, Any]], as_of: date) -> CalcR
                     "market_value": money(value),
                     "yield": pct(yield_rate),
                     "annual_income": money(income),
-                    "is_municipal": bool(position.get("is_municipal")),
+                    "is_tax_free": bool(position.get("is_tax_free")),
                 }
             )
 
-    municipal_income = sum(r["annual_income"] for r in rows if r["is_municipal"])
+    tax_free_income = sum(r["annual_income"] for r in rows if r["is_tax_free"])
 
     return CalcResult(
         method="forward_income = sum(market_value x stated_dividend_yield)",
@@ -447,8 +447,8 @@ def income_projection(positions: Sequence[dict[str, Any]], as_of: date) -> CalcR
             "annual_income": money(total_income),
             "monthly_income": money(total_income / 12),
             "portfolio_yield": pct(safe_div(total_income, total_value)),
-            "municipal_income": money(municipal_income),
-            "taxable_income": money(total_income - municipal_income),
+            "tax_free_income": money(tax_free_income),
+            "taxable_income": money(total_income - tax_free_income),
             "rows": sorted(rows, key=lambda r: r["annual_income"], reverse=True),
         },
     )

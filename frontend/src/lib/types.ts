@@ -57,6 +57,9 @@ export type DemoAccount = {
   home_route: string;
 };
 
+/** Shared password across every demo identity. Never a production credential. */
+export const DEMO_PASSWORD = "Demo1234!";
+
 /** Every financial figure arrives wrapped in its own disclosure (§4). */
 export type Calculation<T = Record<string, unknown>> = {
   method: string;

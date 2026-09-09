@@ -37,17 +37,23 @@ DOCUMENT_EXPIRY_WINDOW_DAYS = 90
 ESTATE_REVIEW_YEARS = 3
 
 
-def _money(value: float | None, currency: str = "USD") -> str:
+LAKH = 1_00_000
+CRORE = 1_00_00_000
+
+
+def _money(value: float | None, currency: str = "INR") -> str:
+    """Rupees in the units Indian readers think in: crore, lakh, thousand."""
     if value is None:
         return "n/a"
-    symbol = {"USD": "$", "EUR": "€", "GBP": "£", "INR": "₹"}.get(currency, "")
     sign = "-" if value < 0 else ""
     amount = abs(float(value))
-    if amount >= 1_000_000:
-        return f"{sign}{symbol}{amount / 1_000_000:,.2f}M"
+    if amount >= CRORE:
+        return f"{sign}₹{amount / CRORE:,.2f} Cr"
+    if amount >= LAKH:
+        return f"{sign}₹{amount / LAKH:,.2f} L"
     if amount >= 1_000:
-        return f"{sign}{symbol}{amount / 1_000:,.1f}K"
-    return f"{sign}{symbol}{amount:,.0f}"
+        return f"{sign}₹{amount / 1_000:,.1f} K"
+    return f"{sign}₹{amount:,.0f}"
 
 
 def _percent(value: float | None) -> str:
@@ -295,29 +301,29 @@ class MockAIService(AIProvider):
 
         return Insight(
             key="tax_loss_harvest",
-            title="Tax-Loss Harvesting Opportunity",
+            title="Tax Loss and Gain Harvesting Opportunity",
             category="tax",
             severity="medium",
             summary=(
-                f"{count} position(s) hold unrealised losses totalling "
-                f"{_money(abs(float(harvest.get('total_harvestable_loss') or 0)), ctx.currency)}. Harvesting them "
-                f"could reduce this year's tax by an estimated {_money(benefit, ctx.currency)}."
+                f"{count} position(s) are candidates for loss or gain harvesting this financial year. Acting on "
+                f"them could reduce this year's tax by an estimated {_money(benefit, ctx.currency)}."
             ),
             impact=(
-                f"The largest single candidate is {top.get('symbol')} with an unrealised loss of "
+                f"The largest single candidate is {top.get('symbol')}, with an unrealised "
+                f"{'gain' if float(top.get('unrealized_loss') or 0) >= 0 else 'loss'} of "
                 f"{_money(abs(float(top.get('unrealized_loss') or 0)), ctx.currency)}."
             ),
-            suggested_next_step="Review the candidates and their replacement securities in the Tax Center, then submit for approval.",
+            suggested_next_step="Review the candidates in the Tax Center, then submit for approval.",
             supporting_facts=[
                 SupportingFact(label="Candidates", value=str(count), raw_value=count, as_of=ctx.as_of),
                 SupportingFact(label="Harvestable loss", value=_money(abs(float(harvest.get("total_harvestable_loss") or 0)), ctx.currency), as_of=ctx.as_of),
+                SupportingFact(label="Harvestable gain (within the section 112A exemption)", value=_money(float(harvest.get("total_harvestable_gain") or 0), ctx.currency), as_of=ctx.as_of),
                 SupportingFact(label="Estimated tax benefit", value=_money(benefit, ctx.currency), raw_value=benefit, as_of=ctx.as_of),
-                SupportingFact(label="Wash-sale status", value=str(top.get("wash_sale_risk", "clear")), as_of=ctx.as_of),
             ],
-            calculation_method="benefit = |unrealised loss| x (applicable capital-gains rate + state rate) per open tax lot",
-            assumptions=["Harvested losses are usable against gains of the same character this year."],
+            calculation_method="benefit = |unrealised gain or loss| x the applicable capital-gains rate, per open tax lot",
+            assumptions=["Harvested losses are usable against gains of a permitted character this year."],
             limitations=[
-                "Each candidate must clear a wash-sale check across all linked accounts.",
+                "India has no wash-sale rule, but brokerage, STT and being briefly out of the market are not modelled.",
                 "Nothing is traded by this platform; execution is simulated after approval.",
             ],
             confidence=0.9,
@@ -371,37 +377,42 @@ class MockAIService(AIProvider):
         )
 
     def _insight_rmd(self, ctx: AIContext) -> Insight | None:
-        rmd = (ctx.tax or {}).get("rmd") or {}
-        required = float(rmd.get("required_amount") or 0)
-        distributed = float(rmd.get("distributed_amount") or 0)
-        if required <= 0 or distributed >= required:
+        """NPS exit annuitization: at least 40% of the Tier I corpus must buy
+        an annuity at exit. This is the Indian analogue of a required
+        minimum distribution — a statutory, deadline-driven retirement event.
+        """
+        nps = (ctx.tax or {}).get("nps_annuitization") or {}
+        required = float(nps.get("required_amount") or 0)
+        purchased = float(nps.get("purchased_amount") or 0)
+        if required <= 0 or purchased >= required:
             return None
 
-        remaining = required - distributed
-        deadline = rmd.get("deadline")
+        remaining = required - purchased
+        accounts = nps.get("accounts") or [{}]
+        deadline = accounts[0].get("exit_deadline")
         return Insight(
-            key="rmd_outstanding",
-            title="Required Minimum Distribution Outstanding",
+            key="nps_annuitization_due",
+            title="NPS Annuitization Not Yet Purchased",
             category="tax",
             severity="high",
             summary=(
-                f"{_money(remaining, ctx.currency)} of this year's required minimum distribution has not yet been taken "
-                f"(required {_money(required, ctx.currency)}, taken {_money(distributed, ctx.currency)})."
+                f"{_money(remaining, ctx.currency)} of the mandatory NPS annuity purchase has not yet been made "
+                f"(required {_money(required, ctx.currency)}, purchased {_money(purchased, ctx.currency)})."
             ),
-            impact="A shortfall at the deadline is subject to an excise tax on the amount not distributed.",
-            suggested_next_step=f"Schedule the remaining distribution before {deadline}. A qualified charitable distribution can satisfy it.",
+            impact="PFRDA exit regulations require at least 40% of the Tier I corpus to buy an annuity at exit.",
+            suggested_next_step=f"Select an annuity provider and complete the purchase before {deadline}.",
             supporting_facts=[
                 SupportingFact(label="Required", value=_money(required, ctx.currency), raw_value=required, as_of=ctx.as_of),
-                SupportingFact(label="Distributed", value=_money(distributed, ctx.currency), raw_value=distributed, as_of=ctx.as_of),
+                SupportingFact(label="Purchased", value=_money(purchased, ctx.currency), raw_value=purchased, as_of=ctx.as_of),
                 SupportingFact(label="Remaining", value=_money(remaining, ctx.currency), raw_value=remaining, as_of=ctx.as_of),
-                SupportingFact(label="Deadline", value=str(deadline), as_of=ctx.as_of),
+                SupportingFact(label="Exit deadline", value=str(deadline), as_of=ctx.as_of),
             ],
-            calculation_method="prior 31 December balance / IRS Uniform Lifetime Table factor",
-            assumptions=["The Uniform Lifetime Table applies to this account owner."],
-            limitations=["Inherited-account rules differ; confirm with your tax adviser."],
-            confidence=0.94,
+            calculation_method="required annuity = corpus at exit x 40% minimum annuitization share (PFRDA exit regulations)",
+            assumptions=["The member exits NPS at the normal retirement age of 60."],
+            limitations=["Premature-exit rules require a higher annuitization share; confirm with the PFRDA circular in force."],
+            confidence=0.9,
             as_of=ctx.as_of,
-            entity_type="rmd",
+            entity_type="nps_annuitization",
             action_url="/tax",
         )
 
@@ -421,20 +432,21 @@ class MockAIService(AIProvider):
 
         return Insight(
             key="estate_review_due",
-            title="Estate Documents Due for Review",
+            title="Succession Documents Due for Review",
             category="estate",
             severity="medium",
-            summary=f"The estate plan was last reviewed {years:.1f} years ago, on {reviewed.isoformat()}.",
+            summary=f"The will and nomination records were last reviewed {years:.1f} years ago, on {reviewed.isoformat()}.",
             impact=(
-                f"Documents older than {ESTATE_REVIEW_YEARS} years may not reflect current family circumstances, "
-                f"asset ownership or tax law. The estate is currently valued at "
-                f"{_money(float(estate.get('gross_estate') or 0), ctx.currency)}."
+                f"Documents older than {ESTATE_REVIEW_YEARS} years may not reflect current family circumstances or "
+                f"asset ownership. The estate is currently valued at "
+                f"{_money(float(estate.get('gross_estate') or 0), ctx.currency)}. India levies no estate or "
+                "inheritance tax, so the risk here is friction and disputed succession, not tax."
             ),
-            suggested_next_step="Schedule a review with your estate attorney and confirm beneficiary designations across all accounts.",
+            suggested_next_step="Schedule a review with your estate lawyer and confirm nominations agree with the will across all accounts.",
             supporting_facts=[
                 SupportingFact(label="Last reviewed", value=reviewed.isoformat(), as_of=ctx.as_of),
                 SupportingFact(label="Years since review", value=f"{years:.1f}", raw_value=years, as_of=ctx.as_of),
-                SupportingFact(label="Projected estate tax", value=_money(float(estate.get("estimated_federal_tax") or 0), ctx.currency), as_of=ctx.as_of),
+                SupportingFact(label="Requires succession process", value=_money(float(estate.get("requires_succession_process") or 0), ctx.currency), as_of=ctx.as_of),
             ],
             calculation_method="elapsed time since the recorded review date, compared with the three-year review cadence",
             assumptions=["A three-year review cadence is the practice standard used here."],
@@ -452,19 +464,22 @@ class MockAIService(AIProvider):
 
         return Insight(
             key="beneficiary_gap",
-            title="Beneficiary Designations Incomplete",
+            title="Nominations Incomplete",
             category="estate",
             severity="high",
-            summary=f"{len(gaps)} account(s) have missing or incomplete beneficiary designations.",
-            impact="Accounts without a valid designation pass through probate rather than directly to the intended person.",
-            suggested_next_step="Complete the designation for each account listed; changes route through review and approval.",
+            summary=f"{len(gaps)} account(s) have a missing or incomplete nomination.",
+            impact=(
+                "Without a nomination, the family will need a succession certificate before the account can be "
+                "claimed. A nominee holds the asset as trustee for the legal heirs — it is not a substitute for a will."
+            ),
+            suggested_next_step="File the nomination for each account listed; changes route through review and approval.",
             supporting_facts=[
                 SupportingFact(label="Accounts affected", value=str(len(gaps)), raw_value=len(gaps), as_of=ctx.as_of),
                 *[SupportingFact(label=str(g.get("account_name")), value=str(g.get("reason")), as_of=ctx.as_of) for g in gaps[:4]],
             ],
-            calculation_method="accounts are checked for at least one primary beneficiary summing to 100%",
-            assumptions=["Retirement, trust and transfer-on-death accounts require a designation."],
-            limitations=["Designations held directly at a custodian and not synced here cannot be verified."],
+            calculation_method="accounts are checked for at least one primary nomination summing to 100%",
+            assumptions=["EPF, PPF, NPS, demat, mutual fund and trust accounts require a nomination."],
+            limitations=["Nominations filed directly with a custodian and not synced here cannot be verified."],
             confidence=0.92,
             as_of=ctx.as_of,
             entity_type="beneficiary",
@@ -514,14 +529,14 @@ class MockAIService(AIProvider):
             summary=(
                 f"{_money(granted, ctx.currency)} of a {_money(target, ctx.currency)} annual grant target has been "
                 f"distributed, leaving {_money(remaining, ctx.currency)} with "
-                f"{_money(balance, ctx.currency)} available in the donor-advised fund."
+                f"{_money(balance, ctx.currency)} available in the charitable trust."
             ),
             impact="Undistributed balances delay funding to the causes the household has chosen to support.",
             suggested_next_step="Review the giving plan and recommend grants to the charities already on file.",
             supporting_facts=[
                 SupportingFact(label="Granted year to date", value=_money(granted, ctx.currency), raw_value=granted, as_of=ctx.as_of),
                 SupportingFact(label="Annual target", value=_money(target, ctx.currency), raw_value=target, as_of=ctx.as_of),
-                SupportingFact(label="DAF balance", value=_money(balance, ctx.currency), raw_value=balance, as_of=ctx.as_of),
+                SupportingFact(label="Charitable vehicle balance", value=_money(balance, ctx.currency), raw_value=balance, as_of=ctx.as_of),
             ],
             calculation_method="remaining = annual grant target - grants made year to date",
             assumptions=["The grant target is the amount agreed in the current giving plan."],
@@ -603,24 +618,25 @@ class MockAIService(AIProvider):
             drafts.append(
                 RecommendationDraft(
                     key="harvest_losses",
-                    title="Harvest available tax losses before year end",
+                    title="Harvest available losses and gains before the financial year ends",
                     category="tax",
                     severity="medium",
                     summary=(
-                        f"Harvesting {harvest.get('opportunity_count')} loss position(s) is estimated to reduce this "
+                        f"Acting on {harvest.get('opportunity_count')} candidate(s) is estimated to reduce this "
                         f"year's tax by {_money(benefit, currency)}."
                     ),
                     rationale=(
-                        "Realising losses offsets realised gains of the same character and up to $3,000 of ordinary "
-                        "income, with any excess carried forward."
+                        "Realising a loss offsets gains of the same character this year, with any excess carried "
+                        "forward eight assessment years. Realising a long-term equity gain inside the unused "
+                        "section 112A exemption resets the cost base at no tax cost."
                     ),
-                    suggested_action="Approve the harvest set and hold the replacement securities through the 31-day wash-sale window.",
+                    suggested_action="Approve the harvest set and repurchase immediately — India has no wash-sale rule.",
                     impact_amount=benefit,
                     impact_label="Estimated tax reduction",
                     confidence=0.9,
                     supporting_data={"harvest": harvest},
-                    assumptions=["Losses are usable against gains of the same character this year."],
-                    limitations=["Each candidate must clear a wash-sale check across every linked account."],
+                    assumptions=["Losses are usable against gains of a permitted character this year."],
+                    limitations=["Brokerage, STT and being briefly out of the market are not modelled."],
                     entity_type="harvest",
                 )
             )
@@ -681,17 +697,17 @@ class MockAIService(AIProvider):
             drafts.append(
                 RecommendationDraft(
                     key="improve_asset_location",
-                    title="Move income-producing assets to tax-deferred accounts",
+                    title="Move debt allocation into PPF or EPF where there is headroom",
                     category="tax",
                     severity="low",
                     summary=f"Repositioning income assets is estimated to save {_money(drag, currency)} a year in tax drag.",
-                    rationale="Taxable bond and alternative income is taxed at ordinary rates; sheltering it improves after-tax return.",
+                    rationale="Debt fund income is taxed at the slab rate in a taxable account; sheltering it in PPF or EPF improves after-tax return.",
                     suggested_action="Reposition gradually using new contributions to avoid realising gains.",
                     impact_amount=drag,
                     impact_label="Estimated annual tax drag avoided",
                     confidence=0.78,
                     supporting_data={"asset_location": location},
-                    assumptions=["Income is taxed at a 35% ordinary rate."],
+                    assumptions=["Income is taxed at the household's marginal slab rate."],
                     limitations=["Moving existing positions may realise gains that exceed the benefit."],
                     entity_type="tax_opportunity",
                 )
@@ -724,7 +740,7 @@ class MockAIService(AIProvider):
                 NextAction(
                     key="review_harvest",
                     label="Review harvesting candidates",
-                    description="Check wash-sale status and replacement securities, then submit for approval.",
+                    description="Check loss and gain harvesting candidates and replacement securities, then submit for approval.",
                     route="/tax",
                     category="tax",
                     requires_approval=True,
@@ -793,19 +809,19 @@ class MockAIService(AIProvider):
     # Document classification (§18)
     # ------------------------------------------------------------------
     CATEGORY_PATTERNS: list[tuple[str, str, list[str], float]] = [
-        ("tax", "Tax Return", [r"1040", r"tax[_\s-]?return", r"return[_\s-]?\d{4}"], 0.96),
-        ("tax", "Form 1099", [r"1099", r"consolidated[_\s-]?statement"], 0.94),
-        ("tax", "Form W-2", [r"\bw-?2\b"], 0.95),
-        ("tax", "Schedule K-1", [r"k-?1\b"], 0.93),
-        ("estate", "Trust Agreement", [r"trust", r"trust[_\s-]?agreement"], 0.92),
-        ("estate", "Will", [r"\bwill\b", r"last[_\s-]?will", r"testament"], 0.93),
+        ("tax", "Form 16", [r"form[_\s-]?16(?!\d)"], 0.96),
+        ("tax", "ITR Acknowledgement", [r"itr", r"acknowledg"], 0.95),
+        ("tax", "Capital Gains Statement", [r"capital[_\s-]?gains?", r"\bcg[_\s-]?statement\b"], 0.94),
+        ("tax", "Form 26AS", [r"26as", r"ais\b", r"tis\b"], 0.93),
+        ("estate", "Trust Agreement", [r"trust", r"trust[_\s-]?deed"], 0.92),
+        ("estate", "Will", [r"\bwill\b", r"registered[_\s-]?will", r"testament"], 0.93),
         ("estate", "Power of Attorney", [r"power[_\s-]?of[_\s-]?attorney", r"\bpoa\b"], 0.94),
-        ("investment", "Account Statement", [r"statement", r"brokerage", r"portfolio[_\s-]?review"], 0.88),
-        ("investment", "Trade Confirmation", [r"trade[_\s-]?confirm", r"confirmation"], 0.9),
-        ("insurance", "Insurance Policy", [r"policy", r"insurance", r"umbrella", r"life[_\s-]?ins"], 0.9),
-        ("banking", "Bank Statement", [r"bank", r"checking", r"savings", r"deposit"], 0.87),
-        ("retirement", "Retirement Statement", [r"401k", r"403b", r"\bira\b", r"pension", r"retirement"], 0.91),
-        ("legal", "Legal Agreement", [r"agreement", r"contract", r"deed", r"llc", r"partnership"], 0.84),
+        ("investment", "Account Statement", [r"statement", r"demat", r"portfolio[_\s-]?review"], 0.88),
+        ("investment", "Trade Confirmation", [r"trade[_\s-]?confirm", r"contract[_\s-]?note"], 0.9),
+        ("insurance", "Insurance Policy", [r"policy", r"insurance", r"\bulip\b", r"life[_\s-]?ins"], 0.9),
+        ("banking", "Bank Statement", [r"bank", r"savings", r"deposit"], 0.87),
+        ("retirement", "Retirement Statement", [r"\bepf\b", r"\bppf\b", r"\bnps\b", r"epf[_\s-]", r"ppf[_\s-]", r"nps[_\s-]", r"pension", r"passbook", r"retirement"], 0.91),
+        ("legal", "Legal Agreement", [r"agreement", r"contract", r"deed", r"partnership", r"sale[_\s-]?deed"], 0.84),
     ]
 
     def classify_document(self, filename: str, metadata: dict[str, Any] | None = None) -> DocumentClassification:
@@ -917,7 +933,7 @@ class MockAIService(AIProvider):
         ("allocation", ["allocation", "allocated", "asset class", "diversif", "mix", "exposure"]),
         ("concentration", ["concentration", "concentrated", "largest position", "biggest holding", "risk"]),
         ("goals", ["goal", "retire", "retirement", "education", "college", "on track"]),
-        ("tax", ["tax", "harvest", "loss", "capital gain", "rmd", "roth", "wash sale"]),
+        ("tax", ["tax", "harvest", "loss", "capital gain", "nps annuit", "regime", "80c", "chapter vi-a"]),
         ("estate", ["estate", "trust", "will", "beneficiar", "inherit"]),
         ("philanthropy", ["charit", "giving", "donat", "daf", "grant", "philanthrop"]),
         ("cash", ["cash", "liquidity", "liquid", "spend"]),
@@ -1014,42 +1030,42 @@ class MockAIService(AIProvider):
             harvest = (context.tax or {}).get("harvest") or {}
             gains = (context.tax or {}).get("realized") or {}
             answer = (
-                f"Realised gains this year total {_money(float(gains.get('net_gain') or 0), currency)} "
-                f"({_money(float(gains.get('short_term_gain') or 0), currency)} short term, "
-                f"{_money(float(gains.get('long_term_gain') or 0), currency)} long term). "
-                f"There are {harvest.get('opportunity_count', 0)} harvesting candidate(s) with an estimated benefit of "
-                f"{_money(float(harvest.get('total_estimated_benefit') or 0), currency)}."
+                f"Realised gains this financial year total {_money(float(gains.get('net_gain') or 0), currency)} "
+                f"({_money(float(gains.get('total_stcg') or 0), currency)} short term, "
+                f"{_money(float(gains.get('total_ltcg') or 0), currency)} long term). "
+                f"There are {harvest.get('opportunity_count', 0)} loss and gain harvesting candidate(s) with an "
+                f"estimated benefit of {_money(float(harvest.get('total_estimated_benefit') or 0), currency)}."
             )
             fact("Net realised gain", _money(float(gains.get("net_gain") or 0), currency), gains.get("net_gain"))
             fact("Harvest candidates", str(harvest.get("opportunity_count", 0)))
             fact("Estimated benefit", _money(float(harvest.get("total_estimated_benefit") or 0), currency))
-            followups = ["Which lots should I harvest first?", "Am I at risk of a wash sale?"]
+            followups = ["Which lots should I harvest first?", "How much of my section 112A exemption is unused?"]
             routes = [NextAction(key="tax", label="Open Tax Center", description="Opportunities, harvesting and projections.", route="/tax", category="tax", requires_approval=True)]
 
         elif intent == "estate":
             estate = context.estate or {}
             answer = (
-                f"The estate is valued at {_money(float(estate.get('gross_estate') or 0), currency)} with an estimated "
-                f"federal estate tax of {_money(float(estate.get('estimated_federal_tax') or 0), currency)}. "
+                f"The estate is valued at {_money(float(estate.get('gross_estate') or 0), currency)}. India levies no "
+                "estate or inheritance tax, so the planning objective is clarity and control, not tax. "
                 f"Documents were last reviewed on {estate.get('last_reviewed_on', 'an unrecorded date')}."
             )
             fact("Gross estate", _money(float(estate.get("gross_estate") or 0), currency))
-            fact("Estimated federal tax", _money(float(estate.get("estimated_federal_tax") or 0), currency))
+            fact("Requires succession process", _money(float(estate.get("requires_succession_process") or 0), currency))
             gaps = estate.get("beneficiary_gaps") or []
             if gaps:
-                answer += f" {len(gaps)} account(s) still need a beneficiary designation."
-                fact("Beneficiary gaps", str(len(gaps)), len(gaps))
-            followups = ["Which accounts are missing beneficiaries?", "When should I next review my documents?"]
-            routes = [NextAction(key="estate", label="Open estate", description="Wills, trusts, POAs and beneficiaries.", route="/estate", category="estate")]
+                answer += f" {len(gaps)} account(s) still need a nomination."
+                fact("Nomination gaps", str(len(gaps)), len(gaps))
+            followups = ["Which accounts are missing a nomination?", "When should I next review my documents?"]
+            routes = [NextAction(key="estate", label="Open estate", description="Wills, trusts, POAs and nominations.", route="/estate", category="estate")]
 
         elif intent == "philanthropy":
             giving = context.philanthropy or {}
             answer = (
-                f"The donor-advised fund holds {_money(float(giving.get('daf_balance') or 0), currency)}. "
+                f"The charitable trust holds {_money(float(giving.get('daf_balance') or 0), currency)}. "
                 f"{_money(float(giving.get('granted_ytd') or 0), currency)} has been granted this year against a target "
                 f"of {_money(float(giving.get('annual_grant_target') or 0), currency)}."
             )
-            fact("DAF balance", _money(float(giving.get("daf_balance") or 0), currency))
+            fact("Charitable vehicle balance", _money(float(giving.get("daf_balance") or 0), currency))
             fact("Granted year to date", _money(float(giving.get("granted_ytd") or 0), currency))
             followups = ["What is the tax benefit of giving appreciated stock?", "Which charities have I supported?"]
             routes = [NextAction(key="philanthropy", label="Open philanthropy", description="Giving dashboard, grants and deduction impact.", route="/philanthropy", category="philanthropy")]
@@ -1069,7 +1085,7 @@ class MockAIService(AIProvider):
             answer = (
                 f"The portfolio is projected to generate {_money(float(income.get('annual_income') or 0), currency)} "
                 f"over the next twelve months, a yield of {_percent(float(income.get('portfolio_yield') or 0))}. "
-                f"{_money(float(income.get('municipal_income') or 0), currency)} of that is municipal income."
+                f"{_money(float(income.get('tax_free_income') or 0), currency)} of that is tax-free income."
             )
             fact("Projected annual income", _money(float(income.get("annual_income") or 0), currency))
             fact("Portfolio yield", _percent(float(income.get("portfolio_yield") or 0)))

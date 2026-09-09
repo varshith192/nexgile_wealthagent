@@ -2,7 +2,7 @@
 
 /** Philanthropy (§17): giving vehicles, grants, mission impact and deduction. */
 
-import { HandCoins, HeartHandshake, Sparkles, Target } from "lucide-react";
+import { HandCoins, HeartHandshake, PiggyBank, Target } from "lucide-react";
 
 import { formatCurrency, formatDate, formatPercent, titleCase } from "@/lib/format";
 import type { Calculation } from "@/lib/types";
@@ -22,7 +22,6 @@ type PhilanthropyPayload = {
     annual_grant_target: number;
     grant_count: number;
     charities_supported: number;
-    qcd_total: number;
   };
   vehicles: {
     id: string;
@@ -52,15 +51,15 @@ type PhilanthropyPayload = {
   }[];
   mission_breakdown: { mission_area: string; amount: number }[];
   deduction_impact: Calculation<{
+    total_donated: number;
+    qualifying_limit: number;
+    uncapped_deduction: number;
+    capped_deduction: number;
     total_deduction: number;
-    deductible_cash: number;
-    deductible_appreciated: number;
-    carryforward: number;
-    federal_tax_savings: number;
-    capital_gains_avoided: number;
-    capital_gains_tax_saved: number;
-    total_benefit: number;
+    tax_saving: number;
     net_cost_of_giving: number;
+    deduction_rate: number;
+    capped_donations_disallowed: number;
   }>;
   giving_plans: {
     id: string;
@@ -74,7 +73,6 @@ type PhilanthropyPayload = {
     status: string;
     review_date: string | null;
   }[];
-  qcds: { id: string; recipient: string; amount: number; gifted_on: string; tax_year: number }[];
 };
 
 export default function PhilanthropyPage() {
@@ -118,18 +116,18 @@ export default function PhilanthropyPage() {
                   icon={HeartHandshake}
                 />
                 <StatTile
-                  label="Total tax benefit"
-                  value={formatCurrency(deduction.total_benefit, { compact: true })}
-                  hint="Deduction plus capital gains avoided"
-                  icon={Sparkles}
+                  label="Section 80G tax saving"
+                  value={formatCurrency(deduction.tax_saving, { compact: true })}
+                  hint={`${formatCurrency(deduction.total_deduction, { compact: true })} deduction claimed`}
+                  icon={PiggyBank}
                 />
               </StatRow>
 
               <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
                 <Card>
-                  <CardHeader title="Giving vehicles" description="Donor-advised funds, foundations and charitable trusts." />
+                  <CardHeader title="Giving vehicles" description="Private foundations and charitable trusts. India has no donor-advised fund structure." />
                   {giving.vehicles.length === 0 ? (
-                    <EmptyState title="No charitable vehicles" description="A DAF or foundation would appear here." />
+                    <EmptyState title="No charitable vehicles" description="A private foundation or charitable trust would appear here." />
                   ) : (
                     <ul className="divide-y divide-border">
                       {giving.vehicles.map((vehicle) => (
@@ -211,14 +209,14 @@ export default function PhilanthropyPage() {
                   <KeyValue
                     columns={3}
                     items={[
+                      { label: "Total donated", value: formatCurrency(deduction.total_donated, { compact: true }) },
+                      { label: "Qualifying limit", value: formatCurrency(deduction.qualifying_limit, { compact: true }) },
+                      { label: "Uncapped deduction", value: formatCurrency(deduction.uncapped_deduction, { compact: true }) },
+                      { label: "Capped deduction", value: formatCurrency(deduction.capped_deduction, { compact: true }) },
                       { label: "Total deduction", value: formatCurrency(deduction.total_deduction, { compact: true }) },
-                      { label: "Deductible cash gifts", value: formatCurrency(deduction.deductible_cash, { compact: true }) },
-                      { label: "Deductible appreciated gifts", value: formatCurrency(deduction.deductible_appreciated, { compact: true }) },
-                      { label: "Carried forward", value: formatCurrency(deduction.carryforward, { compact: true }) },
-                      { label: "Federal tax savings", value: formatCurrency(deduction.federal_tax_savings, { compact: true }) },
-                      { label: "Capital gains avoided", value: formatCurrency(deduction.capital_gains_avoided, { compact: true }) },
-                      { label: "Capital gains tax saved", value: formatCurrency(deduction.capital_gains_tax_saved, { compact: true }) },
-                      { label: "Total benefit", value: formatCurrency(deduction.total_benefit, { compact: true }) },
+                      { label: "Deduction rate", value: formatPercent(deduction.deduction_rate, { decimals: 1 }) },
+                      { label: "Tax saving", value: formatCurrency(deduction.tax_saving, { compact: true }) },
+                      { label: "Capped donations disallowed", value: formatCurrency(deduction.capped_donations_disallowed, { compact: true }) },
                       { label: "Net cost of giving", value: formatCurrency(deduction.net_cost_of_giving, { compact: true }) },
                     ]}
                   />
@@ -290,30 +288,6 @@ export default function PhilanthropyPage() {
                               {formatCurrency(plan.target_amount, { compact: true })} · focus {plan.mission_focus}
                               {plan.review_date ? ` · review ${formatDate(plan.review_date)}` : ""}
                             </p>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </Card>
-
-                  <Card>
-                    <CardHeader
-                      title="Qualified charitable distributions"
-                      description="QCDs count toward the required minimum distribution and are excluded from taxable income."
-                    />
-                    {giving.qcds.length === 0 ? (
-                      <EmptyState title="No QCDs this year" description="Available from age 70½ from an IRA." />
-                    ) : (
-                      <ul className="divide-y divide-border">
-                        {giving.qcds.map((qcd) => (
-                          <li key={qcd.id} className="flex items-center justify-between gap-3 px-5 py-3">
-                            <span className="min-w-0">
-                              <span className="block truncate text-sm font-medium text-ink">{qcd.recipient}</span>
-                              <span className="block text-xs text-ink-muted">
-                                {formatDate(qcd.gifted_on)} · tax year {qcd.tax_year}
-                              </span>
-                            </span>
-                            <span className="shrink-0 text-sm font-medium tabular text-ink">{formatCurrency(qcd.amount)}</span>
                           </li>
                         ))}
                       </ul>

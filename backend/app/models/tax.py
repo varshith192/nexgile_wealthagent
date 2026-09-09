@@ -73,17 +73,24 @@ class WashSaleWindow(BaseModel):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class RMD(BaseModel):
-    __tablename__ = "rmds"
+class NpsAnnuitization(BaseModel):
+    """Mandatory annuity purchase at NPS exit.
+
+    At least 40% of the Tier I corpus must buy an annuity at exit (age 60, or
+    earlier on premature exit); the rest is withdrawn tax free. This tracks
+    that obligation the way the RMD table tracks a US required distribution —
+    a statutory, deadline-driven event against a retirement account.
+    """
+
+    __tablename__ = "nps_annuitizations"
 
     client_id: Mapped[str] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), index=True)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
     tax_year: Mapped[int] = mapped_column(Integer, index=True)
-    prior_year_end_balance: Mapped[float] = mapped_column(Float)
-    life_expectancy_factor: Mapped[float] = mapped_column(Float)
-    required_amount: Mapped[float] = mapped_column(Float)
-    distributed_amount: Mapped[float] = mapped_column(Float, default=0.0)
-    deadline: Mapped[date] = mapped_column(Date())
+    corpus_at_exit: Mapped[float] = mapped_column(Float)
+    required_annuity_amount: Mapped[float] = mapped_column(Float)
+    annuity_purchased_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    exit_deadline: Mapped[date] = mapped_column(Date())
     status: Mapped[str] = mapped_column(String(24), default="pending")
-    satisfied_by_qcd: Mapped[float] = mapped_column(Float, default=0.0)
-    method: Mapped[str] = mapped_column(String(120), default="uniform_lifetime_table")
+    annuity_provider: Mapped[str | None] = mapped_column(String(120))
+    method: Mapped[str] = mapped_column(String(120), default="pfrda_exit_regulations")

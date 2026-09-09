@@ -154,16 +154,16 @@ class TestRebalanceWorkflow:
 
 
 class TestHarvestWorkflow:
-    def test_a_harvest_proposal_carries_a_wash_sale_verdict(self, client, advisor_headers, household_id):
+    def test_a_harvest_proposal_carries_a_loss_and_is_simulated(self, client, advisor_headers, household_id):
         tax_headers = auth_headers(client, "tax_specialist")
-        opportunities = client.get(
+        loss_opportunities = client.get(
             f"/api/tax?household_id={household_id}", headers=advisor_headers
-        ).json()["harvest"]["result"]["opportunities"]
+        ).json()["harvest"]["result"]["loss_opportunities"]
         proposed = {
             h["tax_lot_id"]
             for h in client.get(f"/api/tax/harvests?household_id={household_id}", headers=advisor_headers).json()
         }
-        lot_id = next((o["lot_id"] for o in opportunities if o["lot_id"] not in proposed), None)
+        lot_id = next((o["lot_id"] for o in loss_opportunities if o["lot_id"] not in proposed), None)
         if lot_id is None:
             pytest.skip("no unproposed harvest candidates in the seeded dataset")
 
@@ -175,7 +175,6 @@ class TestHarvestWorkflow:
         assert response.status_code == 201
         body = response.json()
         assert body["unrealized_loss"] < 0
-        assert body["wash_sale_risk"] in {"clear", "blocked"}
         assert body["is_simulated"] is True
 
     def test_the_same_lot_cannot_be_proposed_twice(self, client, advisor_headers, household_id):
@@ -184,10 +183,10 @@ class TestHarvestWorkflow:
             h["tax_lot_id"]
             for h in client.get(f"/api/tax/harvests?household_id={household_id}", headers=advisor_headers).json()
         }
-        opportunities = client.get(
+        loss_opportunities = client.get(
             f"/api/tax?household_id={household_id}", headers=advisor_headers
-        ).json()["harvest"]["result"]["opportunities"]
-        fresh = next((o["lot_id"] for o in opportunities if o["lot_id"] not in proposed), None)
+        ).json()["harvest"]["result"]["loss_opportunities"]
+        fresh = next((o["lot_id"] for o in loss_opportunities if o["lot_id"] not in proposed), None)
         if fresh is None:
             pytest.skip("every harvest candidate already has a proposal")
 

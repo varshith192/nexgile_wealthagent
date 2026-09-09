@@ -192,8 +192,8 @@ def test_institutional_journey(client):
     centre = client.get(f"/api/compliance?plan_id={plan_id}", headers=compliance_headers).json()
     assert centre["tests"] and centre["filings"]
 
-    adp = next(t for t in centre["tests"] if t["test_type"] == "ADP")
-    run = client.post(f"/api/compliance/tests/{adp['id']}/run", headers=compliance_headers)
+    epf_test = next(t for t in centre["tests"] if t["test_type"] == "EPF Contribution Reconciliation")
+    run = client.post(f"/api/compliance/tests/{epf_test['id']}/run", headers=compliance_headers)
     assert run.status_code == 200
     calculation = run.json()["calculation"]
     assert calculation["result"]["result"] in {"pass", "fail"}
@@ -217,7 +217,7 @@ def test_no_screen_is_blank_for_any_role(client):
                    "/api/tax", "/api/estate", "/api/philanthropy", "/api/documents", "/api/messages",
                    "/api/meetings", "/api/reports", "/api/wealthagent", "/api/notifications"],
         "advisor": ["/api/advisor", "/api/advisor/clients", "/api/advisor/rebalancing", "/api/advisor/tasks",
-                    "/api/approvals", "/api/audit", "/api/search?q=johnson"],
+                    "/api/approvals", "/api/audit", "/api/search?q=sharma"],
         "sponsor": ["/api/institutional", "/api/plans", "/api/participants",
                     "/api/institutional/investments", "/api/institutional/fees", "/api/compliance"],
         "participant": ["/api/participant", "/api/participant/readiness", "/api/participant/education",

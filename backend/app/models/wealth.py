@@ -36,7 +36,7 @@ class Account(BaseModel):
     account_subtype: Mapped[str | None] = mapped_column(String(48))
     tax_treatment: Mapped[str] = mapped_column(String(32), default="taxable")
     registration: Mapped[str] = mapped_column(String(64), default="individual")
-    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    currency: Mapped[str] = mapped_column(String(8), default="INR")
     # Cached rollup; holdings remain the source of truth for invested accounts.
     balance: Mapped[float] = mapped_column(Float, default=0.0)
     cash_balance: Mapped[float] = mapped_column(Float, default=0.0)
@@ -62,8 +62,8 @@ class Security(BaseModel):
     security_type: Mapped[str] = mapped_column(String(32), default="etf")
     asset_class: Mapped[str] = mapped_column(String(32), index=True)
     sector: Mapped[str | None] = mapped_column(String(64))
-    region: Mapped[str] = mapped_column(String(48), default="United States")
-    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    region: Mapped[str] = mapped_column(String(48), default="India")
+    currency: Mapped[str] = mapped_column(String(8), default="INR")
     last_price: Mapped[float] = mapped_column(Float, default=0.0)
     previous_close: Mapped[float] = mapped_column(Float, default=0.0)
     dividend_yield: Mapped[float] = mapped_column(Float, default=0.0)
@@ -71,8 +71,10 @@ class Security(BaseModel):
     beta: Mapped[float] = mapped_column(Float, default=1.0)
     annualised_volatility: Mapped[float] = mapped_column(Float, default=0.15)
     esg_score: Mapped[float | None] = mapped_column(Float)
-    is_municipal: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Wash-sale support: a replacement candidate must NOT be substantially identical.
+    # Tax-free bonds (e.g. NHAI, PFC) pay interest exempt from tax, the closest
+    # Indian analogue to a US municipal bond.
+    is_tax_free: Mapped[bool] = mapped_column(Boolean, default=False)
+    # A near-identical scheme, useful when proposing a switch that preserves exposure.
     substantially_identical_to: Mapped[str | None] = mapped_column(String(24))
     price_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     price_status: Mapped[str] = mapped_column(String(24), default="fresh")

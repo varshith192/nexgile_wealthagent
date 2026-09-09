@@ -223,17 +223,18 @@ Password for all: `Demo1234!`
 
 | Label | Email | Role | Lands on |
 |---|---|---|---|
-| Client Demo | `sarah.johnson@example.com` | Client | `/dashboard` |
-| Advisor Demo | `marcus.webb@nexgile.example` | Advisor | `/advisor` |
-| Sponsor Demo | `diane.ellis@brightpath.example` | Plan Sponsor | `/institutional` |
-| Participant Demo | `andre.fitzgerald@brightpath.example` | Participant | `/participant` |
-| Compliance Demo | `priya.raman@nexgile.example` | Compliance | `/compliance` |
-| Admin Demo | `ellen.sorensen@nexgile.example` | Admin | `/admin` |
+| Client Demo | `priya.sharma@example.com` | Client | `/dashboard` |
+| Advisor Demo | `arjun.mehta@nexgile.example` | Advisor | `/advisor` |
+| Sponsor Demo | `deepa.krishnan@brightpath.example` | Plan Sponsor | `/institutional` |
+| Participant Demo | `nikhil.verma@brightpath.example` | Participant | `/participant` |
+| Compliance Demo | `neha.kapoor@nexgile.example` | Compliance | `/compliance` |
+| Admin Demo | `suresh.pillai@nexgile.example` | Admin | `/admin` |
 
-Four further staff accounts exercise the other roles, same password:
-`tobias.frank@nexgile.example` (investment team — decides on recommendations),
-`hana.mori@nexgile.example` (tax specialist), `declan.ross@nexgile.example`
-(estate & trust), `noor.haddad@nexgile.example` (operations).
+Five further staff accounts exercise the other roles, same password:
+`kavita.rao@nexgile.example` (a second advisor), `rajesh.bhatt@nexgile.example`
+(investment team — decides on recommendations), `meera.subramanian@nexgile.example`
+(tax specialist), `vikram.chandrasekhar@nexgile.example` (estate & trust),
+`ritu.malhotra@nexgile.example` (operations).
 
 The login page lists the six labelled demo accounts with one-click sign-in. These
 are demonstration identities against fictional data — no production credential
@@ -245,7 +246,7 @@ appears anywhere in the product.
 Client Demo  → Dashboard → Portfolio → Goals → open a goal → Run scenarios
              → WealthAgent → ask "What is my net worth?"
 Advisor Demo → Clients → Client 360 → WealthAgent → Submit for approval
-Investment team (tobias.frank) → Approvals → Review → Approve → Complete
+Investment team (rajesh.bhatt) → Approvals → Review → Approve → Complete
 Compliance Demo → Audit trail → expand the decision to see before/after
 ```
 

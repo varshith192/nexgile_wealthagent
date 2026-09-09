@@ -24,10 +24,10 @@ import {
   ListChecks,
   MessageSquare,
   PieChart,
+  Radar,
   Receipt,
   Scale,
   ScrollText,
-  Sparkles,
   Target,
   Users,
   Wallet,
@@ -78,7 +78,7 @@ const CLIENT_NAV: NavSection[] = [
   },
   {
     title: "Intelligence",
-    items: [{ label: "WealthAgent", href: "/wealthagent", icon: Sparkles, description: "Insights, recommendations and actions" }],
+    items: [{ label: "WealthAgent", href: "/wealthagent", icon: Radar, description: "Insights, recommendations and actions" }],
   },
 ];
 
@@ -184,7 +184,7 @@ const ADMIN_NAV: NavSection[] = [
     title: "Client View",
     items: [
       { label: "Client Dashboard", href: "/dashboard", icon: LayoutDashboard },
-      { label: "WealthAgent", href: "/wealthagent", icon: Sparkles },
+      { label: "WealthAgent", href: "/wealthagent", icon: Radar },
     ],
   },
 ];

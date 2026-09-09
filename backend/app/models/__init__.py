@@ -49,7 +49,7 @@ from app.models.institutional import (
     Sponsor,
 )
 from app.models.planning import Goal, GoalAccount, Recommendation, Scenario, Task
-from app.models.tax import RMD, Harvest, TaxOpportunity, WashSaleWindow
+from app.models.tax import Harvest, NpsAnnuitization, TaxOpportunity, WashSaleWindow
 from app.models.wealth import (
     Account,
     AllocationTarget,
@@ -126,7 +126,7 @@ __all__ = [
     "Portfolio",
     "PortfolioPosition",
     "PowerOfAttorney",
-    "RMD",
+    "NpsAnnuitization",
     "Rebalance",
     "RebalanceTrade",
     "Recommendation",

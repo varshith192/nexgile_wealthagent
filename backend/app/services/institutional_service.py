@@ -98,12 +98,13 @@ class InstitutionalService:
 
         health = calc.plan_health(
             eligible_employees=plan.eligible_employees,
-            participating_employees=plan.participating_employees,
-            average_deferral_rate=plan.average_deferral_rate,
+            enrolled_employees=plan.participating_employees,
+            average_contribution_rate=plan.average_deferral_rate,
             average_balance=avg_balance,
-            participants_with_beneficiary=with_beneficiary,
-            auto_enrollment=plan.auto_enrollment,
-            auto_escalation=plan.auto_escalation,
+            members_with_nomination=with_beneficiary,
+            uan_seeded=sum(1 for p in participants if p.is_auto_enrolled),
+            nps_corporate_offered=plan.plan_type in {"epf_nps", "nps"},
+            voluntary_pf_offered=True,
             as_of=as_of,
         ).to_dict()
 
@@ -126,8 +127,8 @@ class InstitutionalService:
                 if participants
                 else 0.0,
                 "average_deferral_rate": plan.average_deferral_rate,
-                "roth_adoption": round(
-                    sum(1 for p in participants if p.roth_deferral_rate > 0) / len(participants), 4
+                "vpf_adoption": round(
+                    sum(1 for p in participants if p.vpf_contribution_rate > 0) / len(participants), 4
                 )
                 if participants
                 else 0.0,
@@ -135,19 +136,21 @@ class InstitutionalService:
                     sum(c.employer_match + c.employer_profit_sharing for c in contributions), 2
                 ),
                 "employee_contributions_ytd": round(
-                    sum(c.employee_pretax + c.employee_roth + c.employee_catchup for c in contributions), 2
+                    sum(c.employee_pretax + c.employee_vpf + c.employee_catchup for c in contributions), 2
                 ),
                 "loans_outstanding": len([l for l in loans if l.status == "current"]),
                 "loan_balance": round(sum(l.outstanding_balance for l in loans), 2),
                 "hardship_count": sum(1 for l in loans if l.loan_type == "hardship"),
-                "beneficiary_coverage": round(with_beneficiary / len(participants), 4) if participants else 0.0,
+                "nomination_coverage": round(with_beneficiary / len(participants), 4) if participants else 0.0,
                 "auto_enrolled": sum(1 for p in participants if p.is_auto_enrolled),
                 "average_engagement": round(
                     sum(p.engagement_score for p in participants) / len(participants), 3
                 )
                 if participants
                 else 0.0,
-                "hce_count": sum(1 for p in participants if p.is_hce),
+                # "Excluded employee" is the EPF Act term for a member whose wage
+                # at joining exceeded the statutory ceiling, for whom EPF is optional.
+                "excluded_employee_count": sum(1 for p in participants if p.is_hce),
                 "fully_vested": sum(1 for p in participants if p.vested_percentage >= 1.0),
             },
             "vesting_distribution": self._vesting_distribution(participants),
@@ -225,15 +228,12 @@ class InstitutionalService:
             "years_of_service": round((date.today() - p.hire_date).days / 365.25, 1),
             "annual_salary": round(p.annual_salary, 2),
             "deferral_rate": p.deferral_rate,
-            "roth_deferral_rate": p.roth_deferral_rate,
+            "vpf_contribution_rate": p.vpf_contribution_rate,
             "account_balance": round(p.account_balance, 2),
-            "roth_balance": round(p.roth_balance, 2),
+            "vpf_balance": round(p.vpf_balance, 2),
             "employer_balance": round(p.employer_balance, 2),
             "vested_percentage": p.vested_percentage,
-            "vested_balance": round(
-                p.account_balance - p.employer_balance * (1 - p.vested_percentage), 2
-            ),
-            "is_hce": p.is_hce,
+            "is_excluded_employee": p.is_hce,
             "is_auto_enrolled": p.is_auto_enrolled,
             "has_beneficiary": p.has_beneficiary,
             "retirement_age": p.retirement_age,
@@ -266,19 +266,20 @@ class InstitutionalService:
 
         age = as_of.year - participant.birth_date.year
         ytd = [c for c in contributions if c.tax_year == as_of.year]
-        ytd_deferral = sum(c.employee_pretax + c.employee_roth + c.employee_catchup for c in ytd)
+        ytd_deferral = sum(c.employee_pretax + c.employee_vpf + c.employee_catchup for c in ytd)
+        monthly_basic = participant.annual_salary / 12 * 0.5  # basic pay is typically ~50% of CTC
 
         capacity = ret_calc.contribution_capacity(
             age=age,
-            salary=participant.annual_salary,
-            deferral_rate=participant.deferral_rate + participant.roth_deferral_rate,
-            ytd_deferral=ytd_deferral,
+            monthly_basic=monthly_basic,
+            epf_rate=participant.deferral_rate,
+            ppf_contributed=0.0,
+            nps_contributed=0.0,
+            elss_contributed=0.0,
             as_of=as_of,
         ).to_dict()
 
-        vesting = ret_calc.vesting_status(
-            hire_date=participant.hire_date, schedule=plan.vesting_schedule, as_of=as_of
-        ).to_dict()
+        vesting = ret_calc.vesting_status(hire_date=participant.hire_date, as_of=as_of).to_dict()
 
         readiness = self.retirement_readiness(participant.id, as_of)
 
@@ -293,13 +294,13 @@ class InstitutionalService:
                     {
                         "period_end": c.period_end.isoformat(),
                         "employee_pretax": round(c.employee_pretax, 2),
-                        "employee_roth": round(c.employee_roth, 2),
+                        "employee_vpf": round(c.employee_vpf, 2),
                         "employee_catchup": round(c.employee_catchup, 2),
                         "employer_match": round(c.employer_match, 2),
                         "employer_profit_sharing": round(c.employer_profit_sharing, 2),
                         "total": round(
                             c.employee_pretax
-                            + c.employee_roth
+                            + c.employee_vpf
                             + c.employee_catchup
                             + c.employer_match
                             + c.employer_profit_sharing,
@@ -335,7 +336,7 @@ class InstitutionalService:
                     "expense_ratio": o.expense_ratio,
                     "three_year_return": o.three_year_return,
                     "five_year_return": o.five_year_return,
-                    "is_qdia": o.is_qdia,
+                    "is_default_scheme": o.is_default_scheme,
                     "ips_status": o.ips_status,
                 }
                 for o in options
@@ -357,84 +358,82 @@ class InstitutionalService:
         plan = self.db.get(Plan, participant.plan_id)
         overrides = overrides or {}
 
-        age = overrides.get("current_age") or (as_of.year - participant.birth_date.year)
-        retirement_age = overrides.get("retirement_age") or participant.retirement_age
+        age = int(overrides.get("current_age") or (as_of.year - participant.birth_date.year))
+        retirement_age = int(overrides.get("retirement_age") or participant.retirement_age)
         salary = overrides.get("annual_income") or participant.annual_salary
         deferral = overrides.get("deferral_rate")
-        deferral = deferral if deferral is not None else participant.deferral_rate + participant.roth_deferral_rate
-        annual_contribution = salary * deferral
-        match_rate = min(deferral, 0.04)
-        employer_match = overrides.get("employer_match", salary * match_rate)
-        expected_return = overrides.get("expected_return", 0.065)
+        deferral = deferral if deferral is not None else participant.deferral_rate + participant.vpf_contribution_rate
+        monthly_basic = salary / 12 * 0.5  # basic pay is typically ~50% of CTC
+        annual_contribution = monthly_basic * 12 * deferral
+        expected_return = overrides.get("expected_return", 0.08)
 
-        projection = ret_calc.retirement_projection(
-            current_age=int(age),
-            retirement_age=int(retirement_age),
-            current_savings=overrides.get("current_savings", participant.account_balance),
-            annual_contribution=annual_contribution,
-            employer_match=employer_match,
-            expected_return=expected_return,
-            current_income=salary,
-            social_security_annual=overrides.get("social_security_annual", min(salary * 0.28, 48_000.0)),
-            other_income_annual=overrides.get("other_income_annual", 0.0),
-            healthcare_annual=overrides.get("healthcare_annual", 12_000.0),
-            inflation=overrides.get("inflation", 0.025),
-            as_of=as_of,
-        ).to_dict()
+        years_of_service_now = (as_of - participant.hire_date).days / 365.25
+        service_at_retirement = years_of_service_now + max(retirement_age - age, 0)
+        employer_contribution = overrides.get(
+            "employer_contribution", monthly_basic * 12 * ret_calc.EPF_EMPLOYER_RATE
+        )
+        eps_pension_annual = overrides.get(
+            "eps_pension_annual",
+            ret_calc.eps_pension(
+                pensionable_salary=monthly_basic, pensionable_service=int(service_at_retirement), as_of=as_of
+            ).result["annual_pension"],
+        )
+
+        def run_projection(
+            current_savings: float, contribution: float, employer: float, rate: float, ret_age: int
+        ) -> dict[str, Any]:
+            return ret_calc.retirement_projection(
+                current_age=age,
+                retirement_age=ret_age,
+                current_savings=current_savings,
+                annual_contribution=contribution,
+                employer_contribution=employer,
+                expected_return=rate,
+                current_income=salary,
+                eps_pension_annual=eps_pension_annual,
+                nps_annuity_annual=overrides.get("nps_annuity_annual", 0.0),
+                rental_income_annual=overrides.get("rental_income_annual", 0.0),
+                healthcare_annual=overrides.get("healthcare_annual", 1_00_000.0),
+                inflation=overrides.get("inflation", 0.06),
+                as_of=as_of,
+            ).result
+
+        current_savings = overrides.get("current_savings", participant.account_balance)
+        base_result = run_projection(current_savings, annual_contribution, employer_contribution, expected_return, retirement_age)
+        projection = {"result": base_result}
 
         monte_carlo = ret_calc.monte_carlo_projection(
-            starting_balance=overrides.get("current_savings", participant.account_balance),
-            annual_contribution=annual_contribution + employer_match,
-            years=max(int(retirement_age) - int(age), 1),
+            starting_balance=current_savings,
+            annual_contribution=annual_contribution + employer_contribution,
+            years=max(retirement_age - age, 1),
             expected_return=expected_return,
             volatility=overrides.get("volatility", 0.13),
             as_of=as_of,
             trials=1000,
-            success_threshold=projection["result"]["required_balance"],
+            success_threshold=base_result["required_corpus"],
         ).to_dict()
 
-        scenarios = []
-        for label, adjust in (
-            ("Base case", {}),
-            ("Contribute 2% more", {"deferral_rate": deferral + 0.02}),
-            ("Retire 3 years later", {"retirement_age": int(retirement_age) + 3}),
-            ("Returns 1.5% lower", {"expected_return": expected_return - 0.015}),
+        scenarios = [{"label": "Base case", **base_result, "is_baseline": True}]
+        for label, alt_deferral, alt_retirement_age, alt_return in (
+            ("Contribute 2% more", deferral + 0.02, retirement_age, expected_return),
+            ("Retire 3 years later", deferral, retirement_age + 3, expected_return),
+            ("Returns 1.5% lower", deferral, retirement_age, expected_return - 0.015),
         ):
-            if not adjust:
-                scenarios.append({"label": label, **projection["result"], "is_baseline": True})
-                continue
-            # Recomputed inline rather than recursively so each scenario stays cheap.
-            merged = {**overrides, **adjust}
-            alt_deferral = merged.get("deferral_rate", deferral)
-            alt_retirement_age = int(merged.get("retirement_age", retirement_age))
-            alt_return = merged.get("expected_return", expected_return)
-            alt_contribution = salary * alt_deferral
-            alt_projection = ret_calc.retirement_projection(
-                current_age=int(age),
-                retirement_age=alt_retirement_age,
-                current_savings=merged.get("current_savings", participant.account_balance),
-                annual_contribution=alt_contribution,
-                employer_match=salary * min(alt_deferral, 0.04),
-                expected_return=alt_return,
-                current_income=salary,
-                social_security_annual=merged.get("social_security_annual", min(salary * 0.28, 48_000.0)),
-                other_income_annual=merged.get("other_income_annual", 0.0),
-                healthcare_annual=merged.get("healthcare_annual", 12_000.0),
-                inflation=merged.get("inflation", 0.025),
-                as_of=as_of,
-            ).result
-            scenarios.append({"label": label, **alt_projection, "is_baseline": False})
+            alt_contribution = monthly_basic * 12 * alt_deferral
+            alt_result = run_projection(current_savings, alt_contribution, employer_contribution, alt_return, alt_retirement_age)
+            scenarios.append({"label": label, **alt_result, "is_baseline": False})
 
         return {
             "projection": projection,
             "monte_carlo": monte_carlo,
             "scenarios": scenarios,
             "inputs": {
-                "current_age": int(age),
-                "retirement_age": int(retirement_age),
+                "current_age": age,
+                "retirement_age": retirement_age,
                 "annual_income": round(salary, 2),
                 "deferral_rate": deferral,
-                "current_savings": round(overrides.get("current_savings", participant.account_balance), 2),
+                "current_savings": round(current_savings, 2),
+                "eps_pension_annual": round(eps_pension_annual, 2),
                 "employer_match_formula": plan.employer_match_formula if plan else None,
                 "expected_return": expected_return,
             },
@@ -446,7 +445,7 @@ class InstitutionalService:
         options = self.db.execute(
             select(InvestmentOption).where(InvestmentOption.plan_id == plan.id)
         ).scalars().all()
-        monitor = calc.ips_monitor(
+        monitor = calc.scheme_monitor(
             [
                 {
                     "id": o.id,
@@ -461,7 +460,7 @@ class InstitutionalService:
                     "category_median_expense": o.category_median_expense,
                     "plan_assets": o.plan_assets,
                     "participants_invested": o.participants_invested,
-                    "is_qdia": o.is_qdia,
+                    "is_qdia": o.is_default_scheme,
                 }
                 for o in options
             ],
@@ -578,30 +577,58 @@ class InstitutionalService:
         if not test:
             raise NotFoundError("Compliance test not found.")
 
-        if test.test_type.lower() in {"adp", "acp"}:
-            result = calc.adp_acp_test(
-                hce_average=test.hce_value or 0.0,
-                nhce_average=test.nhce_value or 0.0,
-                test_type=test.test_type,
-                tax_year=test.tax_year,
+        participants = self.db.execute(
+            select(Participant).where(Participant.plan_id == test.plan_id)
+        ).scalars().all()
+        key = test.test_type.lower()
+
+        if "epf" in key or "contribution" in key:
+            total_wages = sum(p.annual_salary * 0.5 for p in participants)  # basic ~ 50% of CTC
+            employee_remitted = total_wages * calc.EPF_EMPLOYEE_RATE
+            eps_remitted = (
+                min(total_wages, calc.EPF_WAGE_CEILING_MONTHLY * 12 * len(participants)) * calc.EPS_DIVERSION_RATE
+                if participants
+                else 0.0
+            )
+            employer_remitted = total_wages * calc.EPF_EMPLOYER_RATE - eps_remitted
+            result = calc.epf_contribution_check(
+                total_wages=total_wages,
+                employee_remitted=employee_remitted,
+                employer_remitted=employer_remitted,
+                eps_remitted=eps_remitted,
+                member_count=len(participants),
                 as_of=as_of,
             )
-        elif "top" in test.test_type.lower():
-            plan = self.db.get(Plan, test.plan_id)
-            result = calc.top_heavy_test(
-                key_employee_balances=test.hce_value or 0.0,
-                total_plan_assets=test.nhce_value or plan.total_assets,
-                tax_year=test.tax_year,
-                as_of=as_of,
+            result_value = result.result["result"]
+            corrective_action = result.result.get("corrective_action")
+        elif "nomination" in key:
+            result = calc.nomination_coverage(
+                [
+                    {
+                        "id": p.id,
+                        "full_name": p.full_name,
+                        "balance": p.account_balance,
+                        "has_nomination": p.has_beneficiary,
+                    }
+                    for p in participants
+                ],
+                as_of,
+            )
+            coverage = result.result["nomination_coverage"]
+            result_value = "pass" if coverage >= 0.90 else "fail"
+            corrective_action = (
+                None
+                if coverage >= 0.90
+                else f"Follow up with the {result.result['members_without_nomination']} member(s) without a nomination on file."
             )
         else:
             raise ValidationError(f"No automated calculation exists for the {test.test_type} test.")
 
         before = {"result": test.result, "status": test.status}
-        test.result = result.result["result"]
+        test.result = result_value
         test.status = str(ComplianceStatus.COMPLETE)
         test.completed_on = as_of
-        test.corrective_action = result.result.get("corrective_action")
+        test.corrective_action = corrective_action
 
         self.audit.record(
             action=AuditAction.COMPLIANCE_ACTION,

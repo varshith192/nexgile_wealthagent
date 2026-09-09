@@ -130,36 +130,104 @@ ROLE_PERMISSIONS: dict[str, set[Permission]] = {
 
 
 class AccountType(StrEnum):
-    BROKERAGE = "brokerage"
-    RETIREMENT = "retirement"
-    TRUST = "trust"
-    EDUCATION = "education"
-    BANKING = "banking"
-    CREDIT = "credit"
-    MORTGAGE = "mortgage"
+    """Indian account types.
+
+    Deliberately named for what they are in India rather than mapped onto
+    foreign equivalents: an EPF account is not an IRA, and the tax treatment,
+    withdrawal rules and statutory limits differ in ways the product models.
+    """
+
+    DEMAT = "demat"                  # broking account holding listed securities
+    MUTUAL_FUND = "mutual_fund"      # folio held directly with an AMC / RTA
+    EPF = "epf"                      # Employees Provident Fund
+    PPF = "ppf"                      # Public Provident Fund
+    NPS = "nps"                      # National Pension System
+    SUKANYA = "sukanya"              # Sukanya Samriddhi Account
+    HUF = "huf"                      # Hindu Undivided Family
+    TRUST = "trust"                  # private family trust
+    SAVINGS = "savings"              # savings / current bank account
+    FIXED_DEPOSIT = "fixed_deposit"  # bank or corporate FD
+    HOME_LOAN = "home_loan"
+    CREDIT_CARD = "credit_card"
     EXTERNAL = "external"
 
 
-LIABILITY_ACCOUNT_TYPES = {AccountType.CREDIT, AccountType.MORTGAGE}
+ACCOUNT_TYPE_LABELS: dict[str, str] = {
+    AccountType.DEMAT: "Demat & Broking",
+    AccountType.MUTUAL_FUND: "Mutual Fund Folio",
+    AccountType.EPF: "Employees Provident Fund",
+    AccountType.PPF: "Public Provident Fund",
+    AccountType.NPS: "National Pension System",
+    AccountType.SUKANYA: "Sukanya Samriddhi",
+    AccountType.HUF: "HUF",
+    AccountType.TRUST: "Private Trust",
+    AccountType.SAVINGS: "Bank Account",
+    AccountType.FIXED_DEPOSIT: "Fixed Deposit",
+    AccountType.HOME_LOAN: "Home Loan",
+    AccountType.CREDIT_CARD: "Credit Card",
+    AccountType.EXTERNAL: "External",
+}
+
+LIABILITY_ACCOUNT_TYPES = {AccountType.CREDIT_CARD, AccountType.HOME_LOAN}
+
+# Accounts whose corpus is locked or restricted until a statutory event.
+RETIREMENT_ACCOUNT_TYPES = {AccountType.EPF, AccountType.PPF, AccountType.NPS}
+
+# Accounts a nomination is legally required on. In India a nominee is a
+# trustee for the legal heirs, not the owner — the product says so explicitly.
+NOMINATION_REQUIRED_TYPES = {
+    AccountType.EPF,
+    AccountType.PPF,
+    AccountType.NPS,
+    AccountType.SUKANYA,
+    AccountType.DEMAT,
+    AccountType.MUTUAL_FUND,
+}
+
+
+class TaxTreatment(StrEnum):
+    """How a rupee inside the account is taxed on the way out."""
+
+    TAXABLE = "taxable"          # demat, mutual funds, FDs — capital gains apply
+    EEE = "eee"                  # PPF, Sukanya — exempt-exempt-exempt
+    EET = "eet"                  # NPS — partly taxed at exit
+    EPF_EXEMPT = "epf_exempt"    # EPF — exempt after five years continuous service
+    NOT_APPLICABLE = "n/a"
+
+
+TAX_TREATMENT_LABELS: dict[str, str] = {
+    TaxTreatment.TAXABLE: "Taxable",
+    TaxTreatment.EEE: "Exempt-Exempt-Exempt",
+    TaxTreatment.EET: "Exempt-Exempt-Taxed",
+    TaxTreatment.EPF_EXEMPT: "Tax-free after 5 years",
+    TaxTreatment.NOT_APPLICABLE: "Not applicable",
+}
 
 
 class AssetClass(StrEnum):
-    US_EQUITY = "us_equity"
+    INDIAN_EQUITY = "indian_equity"
     INTL_EQUITY = "intl_equity"
-    FIXED_INCOME = "fixed_income"
+    DEBT = "debt"
     CASH = "cash"
+    GOLD = "gold"
     ALTERNATIVES = "alternatives"
-    REAL_ASSETS = "real_assets"
 
 
 ASSET_CLASS_LABELS = {
-    AssetClass.US_EQUITY: "US Equity",
+    AssetClass.INDIAN_EQUITY: "Indian Equity",
     AssetClass.INTL_EQUITY: "International Equity",
-    AssetClass.FIXED_INCOME: "Fixed Income",
-    AssetClass.CASH: "Cash",
-    AssetClass.ALTERNATIVES: "Alternatives",
-    AssetClass.REAL_ASSETS: "Real Assets",
+    AssetClass.DEBT: "Debt",
+    AssetClass.CASH: "Cash & Liquid",
+    AssetClass.GOLD: "Gold",
+    AssetClass.ALTERNATIVES: "Alternatives & REITs",
 }
+
+
+class TaxRegime(StrEnum):
+    """Every Indian taxpayer chooses between two regimes each year."""
+
+    OLD = "old"   # higher rates, but Chapter VI-A deductions available
+    NEW = "new"   # lower slab rates, almost no deductions
 
 
 class GoalType(StrEnum):

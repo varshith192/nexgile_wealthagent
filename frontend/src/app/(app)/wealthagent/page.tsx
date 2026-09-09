@@ -14,12 +14,12 @@ import {
   ArrowRight,
   ChevronRight,
   CircleHelp,
+  Cpu,
   Info,
   Lightbulb,
   ListChecks,
   Send,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 
 import { api } from "@/lib/api";
@@ -73,7 +73,7 @@ export default function WealthAgentPage() {
               meta={
                 <>
                   <Badge tone="primary">
-                    <Sparkles className="size-3" />
+                    <Cpu className="size-3" />
                     {workspace.provider.mode === "mock" ? "Deterministic rules engine" : titleCase(workspace.provider.name)}
                   </Badge>
                   <span className="text-xs text-ink-muted">As of {formatDate(workspace.as_of)}</span>

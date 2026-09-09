@@ -16,10 +16,10 @@ import {
   ChevronRight,
   Cpu,
   Database,
+  Lightbulb,
   ListChecks,
   ScrollText,
   ShieldCheck,
-  Sparkles,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -169,7 +169,7 @@ export default function AdminPage() {
                   label="Opportunity value"
                   value={formatCurrency(dashboard.summary.opportunity_value, { compact: true })}
                   hint="Identified, not yet actioned"
-                  icon={Sparkles}
+                  icon={Lightbulb}
                 />
               </StatRow>
 

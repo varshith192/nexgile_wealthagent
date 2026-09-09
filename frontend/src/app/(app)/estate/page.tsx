@@ -20,12 +20,13 @@ type EstatePayload = {
   projection: Calculation<{
     gross_estate: number;
     net_estate: number;
-    available_exemption: number;
-    taxable_estate: number;
-    estimated_federal_tax: number;
-    net_to_heirs: number;
-    effective_rate: number;
-    exemption_remaining: number;
+    estate_tax_payable: number;
+    smooth_transfer_value: number;
+    requires_succession_process: number;
+    succession_readiness: number;
+    findings: { severity: string; finding: string; detail: string }[];
+    finding_count: number;
+    note: string;
   }>;
   documents: {
     id: string;
@@ -96,12 +97,15 @@ type EstatePayload = {
   }[];
   gifts: {
     usage: Calculation<{
-      recipients: { recipient: string; gifted: number; annual_exclusion: number; remaining_exclusion: number; uses_lifetime_exemption: number }[];
-      total_gifted: number;
-      lifetime_exemption_used: number;
-      annual_exclusion_per_recipient: number;
+      gifts: { recipient: string; amount: number; gifted_on: string; is_relative: boolean; exempt: boolean; basis: string }[];
+      total_from_relatives: number;
+      total_from_non_relatives: number;
+      threshold: number;
+      taxable_amount: number;
+      threshold_breached: boolean;
+      headroom: number;
     }>;
-    gifts: { id: string; recipient: string; gift_type: string; amount: number; gifted_on: string; tax_year: number; is_qcd: boolean }[];
+    gifts: { id: string; recipient: string; gift_type: string; amount: number; gifted_on: string; tax_year: number; is_relative: boolean; notes: string | null }[];
   };
   last_reviewed_on: string | null;
   review_reminders: { id: string; title: string; due: string; status: string }[];
@@ -120,8 +124,8 @@ export default function EstatePage() {
           return (
             <>
               <PageHeader
-                title="Estate"
-                description="Wills, trusts, powers of attorney and beneficiary designations, with a federal estate tax estimate."
+                title="Estate & Succession"
+                description="Wills, trusts, powers of attorney and nominations. India levies no estate or inheritance tax — the objective is clarity and control, not tax."
                 meta={
                   <>
                     <span className="text-xs text-ink-muted">As of {formatDate(estate.as_of)}</span>
@@ -137,17 +141,21 @@ export default function EstatePage() {
               <StatRow columns={4}>
                 <StatTile label="Gross estate" value={formatCurrency(projection.gross_estate, { compact: true })} icon={Scale} tone="primary" />
                 <StatTile
-                  label="Available exemption"
-                  value={formatCurrency(projection.available_exemption, { compact: true })}
-                  hint={`${formatCurrency(projection.exemption_remaining, { compact: true })} would remain`}
+                  label="Transfers smoothly"
+                  value={formatCurrency(projection.smooth_transfer_value, { compact: true })}
+                  hint="Via nomination, joint holding or trust"
                 />
                 <StatTile
-                  label="Estimated federal estate tax"
-                  value={formatCurrency(projection.estimated_federal_tax, { compact: true })}
-                  hint={`Effective rate ${formatPercent(projection.effective_rate, { decimals: 1 })}`}
-                  tone={projection.estimated_federal_tax > 0 ? "warning" : "positive"}
+                  label="Needs a succession process"
+                  value={formatCurrency(projection.requires_succession_process, { compact: true })}
+                  hint="No nomination, joint holder or trust on file"
+                  tone={projection.requires_succession_process > 0 ? "warning" : "positive"}
                 />
-                <StatTile label="Projected to heirs" value={formatCurrency(projection.net_to_heirs, { compact: true })} icon={Users} />
+                <StatTile
+                  label="Succession readiness"
+                  value={formatPercent(projection.succession_readiness, { decimals: 0 })}
+                  icon={Users}
+                />
               </StatRow>
 
               {estate.beneficiary_gaps.length > 0 ? (
@@ -157,11 +165,12 @@ export default function EstatePage() {
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-ink">
                         {estate.beneficiary_gaps.length} account
-                        {estate.beneficiary_gaps.length === 1 ? "" : "s"} need a beneficiary designation
+                        {estate.beneficiary_gaps.length === 1 ? "" : "s"} need a nomination
                       </p>
                       <p className="mt-0.5 text-xs leading-5 text-ink-muted">
-                        An account without a valid designation passes through probate rather than directly to the
-                        intended person.
+                        Without a nomination the family will need a succession certificate before the account can be
+                        claimed. A nominee holds the asset as trustee for the legal heirs — it is not a substitute
+                        for a will.
                       </p>
                       <ul className="mt-3 space-y-1.5">
                         {estate.beneficiary_gaps.map((gap) => (
@@ -389,40 +398,23 @@ export default function EstatePage() {
 
                   {tab === "gifts" ? (
                     <>
+                      <p className="text-sm text-ink-muted">
+                        Section 56(2)(x): gifts between specified relatives are exempt regardless of amount. Gifts
+                        from a non-relative are taxable in full — not just the excess — once they cross{" "}
+                        {formatCurrency(estate.gifts.usage.result.threshold)} in a financial year.
+                      </p>
                       <KeyValue
                         columns={3}
                         items={[
-                          { label: "Total gifted this year", value: formatCurrency(estate.gifts.usage.result.total_gifted) },
-                          { label: "Annual exclusion per recipient", value: formatCurrency(estate.gifts.usage.result.annual_exclusion_per_recipient) },
-                          { label: "Lifetime exemption used", value: formatCurrency(estate.gifts.usage.result.lifetime_exemption_used) },
+                          { label: "From relatives (exempt)", value: formatCurrency(estate.gifts.usage.result.total_from_relatives) },
+                          { label: "From non-relatives", value: formatCurrency(estate.gifts.usage.result.total_from_non_relatives) },
+                          {
+                            label: "Taxable amount",
+                            value: formatCurrency(estate.gifts.usage.result.taxable_amount),
+                            hint: estate.gifts.usage.result.threshold_breached ? "Threshold breached — the full amount is taxable" : undefined,
+                          },
                         ]}
                       />
-                      {estate.gifts.usage.result.recipients.length > 0 ? (
-                        <div className="scroll-x rounded-md border border-border">
-                          <Table>
-                            <THead>
-                              <TR>
-                                <TH>Recipient</TH>
-                                <TH align="right">Gifted</TH>
-                                <TH align="right">Exclusion</TH>
-                                <TH align="right">Remaining</TH>
-                                <TH align="right">Uses lifetime exemption</TH>
-                              </TR>
-                            </THead>
-                            <tbody>
-                              {estate.gifts.usage.result.recipients.map((row) => (
-                                <TR key={row.recipient}>
-                                  <TD className="font-medium">{row.recipient}</TD>
-                                  <TD align="right" numeric>{formatCurrency(row.gifted)}</TD>
-                                  <TD align="right" numeric className="text-ink-muted">{formatCurrency(row.annual_exclusion)}</TD>
-                                  <TD align="right" numeric className="text-positive">{formatCurrency(row.remaining_exclusion)}</TD>
-                                  <TD align="right" numeric>{formatCurrency(row.uses_lifetime_exemption)}</TD>
-                                </TR>
-                              ))}
-                            </tbody>
-                          </Table>
-                        </div>
-                      ) : null}
 
                       <div>
                         <p className="section-label">Gift history</p>
@@ -433,10 +425,12 @@ export default function EstatePage() {
                                 <span className="flex items-center gap-2 text-sm font-medium text-ink">
                                   {gift.recipient}
                                   <Badge tone="outline" size="sm">{titleCase(gift.gift_type)}</Badge>
-                                  {gift.is_qcd ? <Badge tone="primary" size="sm">QCD</Badge> : null}
+                                  <Badge tone={gift.is_relative ? "positive" : "warning"} size="sm">
+                                    {gift.is_relative ? "Specified relative" : "Non-relative"}
+                                  </Badge>
                                 </span>
                                 <span className="mt-0.5 block text-xs text-ink-muted">
-                                  {formatDate(gift.gifted_on)} · tax year {gift.tax_year}
+                                  {formatDate(gift.gifted_on)} · FY {gift.tax_year}-{String(gift.tax_year + 1).slice(-2)}
                                 </span>
                               </span>
                               <span className="shrink-0 text-sm font-medium tabular text-ink">{formatCurrency(gift.amount)}</span>
@@ -445,7 +439,7 @@ export default function EstatePage() {
                         </ul>
                       </div>
 
-                      <CalcDisclosure calculation={estate.gifts.usage} label="How gift exclusions are calculated" />
+                      <CalcDisclosure calculation={estate.gifts.usage} label="How the gift tax position is calculated" />
                     </>
                   ) : null}
 
@@ -488,23 +482,36 @@ export default function EstatePage() {
               </Card>
 
               <Card>
-                <CardHeader title="Estate tax estimate" description="A planning estimate. Confirm every figure with your estate attorney." />
+                <CardHeader title="Succession readiness" description="A planning view, not legal advice. Confirm every figure with your estate lawyer." />
                 <CardBody className="space-y-4">
                   <KeyValue
                     columns={3}
                     items={[
                       { label: "Gross estate", value: formatCurrency(projection.gross_estate, { compact: true }) },
                       { label: "Net estate", value: formatCurrency(projection.net_estate, { compact: true }) },
-                      { label: "Available exemption", value: formatCurrency(projection.available_exemption, { compact: true }) },
-                      { label: "Taxable estate", value: formatCurrency(projection.taxable_estate, { compact: true }) },
-                      { label: "Estimated federal tax", value: formatCurrency(projection.estimated_federal_tax, { compact: true }) },
-                      { label: "Net to heirs", value: formatCurrency(projection.net_to_heirs, { compact: true }) },
+                      { label: "Transfers smoothly", value: formatCurrency(projection.smooth_transfer_value, { compact: true }) },
+                      { label: "Needs succession process", value: formatCurrency(projection.requires_succession_process, { compact: true }) },
+                      { label: "Succession readiness", value: formatPercent(projection.succession_readiness, { decimals: 0 }) },
+                      { label: "Estate or inheritance tax", value: formatCurrency(projection.estate_tax_payable) },
                     ]}
                   />
+                  {projection.findings.length > 0 ? (
+                    <ul className="space-y-2">
+                      {projection.findings.map((finding) => (
+                        <li key={finding.finding} className="rounded-md border border-border px-3.5 py-2.5">
+                          <p className="flex items-center gap-2 text-sm font-medium text-ink">
+                            <Badge tone={finding.severity === "high" ? "warning" : "outline"} size="sm">{titleCase(finding.severity)}</Badge>
+                            {finding.finding}
+                          </p>
+                          <p className="mt-1 text-xs leading-5 text-ink-muted">{finding.detail}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                   <CalcDisclosure calculation={estate.projection} />
                   <p className="flex items-start gap-2 text-xs leading-relaxed text-ink-subtle">
                     <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-                    State estate and inheritance taxes are not included and vary considerably by jurisdiction.
+                    {projection.note}
                   </p>
                 </CardBody>
               </Card>

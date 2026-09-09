@@ -3,7 +3,7 @@
 /** Tax Center (§15). Nothing here trades; opportunities route through approval. */
 
 import { useState } from "react";
-import { AlertTriangle, CalendarClock, Receipt, ShieldAlert, TrendingDown } from "lucide-react";
+import { CalendarClock, Receipt, ShieldAlert, TrendingDown, TrendingUp } from "lucide-react";
 
 import { formatCurrency, formatDate, formatNumber, formatPercent, titleCase } from "@/lib/format";
 import type { Calculation } from "@/lib/types";
@@ -22,33 +22,40 @@ type HarvestRow = {
   quantity: number;
   cost_basis: number;
   market_value: number;
-  unrealized_loss: number;
+  unrealized_gain: number;
+  harvestable_gain?: number;
   holding_period: string;
   acquired_on: string;
   applicable_rate: number;
   estimated_tax_benefit: number;
-  wash_sale_risk: string;
-  replacement_symbol: string | null;
+  rationale: string;
+  replacement_symbol?: string | null;
 };
 
 type TaxPayload = {
   tax_year: number;
+  financial_year: string;
   as_of: string;
-  rates: { marginal: number; long_term_capital_gains: number; state: number };
-  realized_gains: Calculation<{ short_term_gain: number; long_term_gain: number; net_gain: number; transaction_count: number }>;
+  rates: { marginal: number; long_term_capital_gains: number; regime: string };
+  realized_gains: Calculation<{
+    equity_stcg: number; equity_ltcg: number; other_stcg: number; other_ltcg: number;
+    total_stcg: number; total_ltcg: number; net_gain: number; transaction_count: number;
+  }>;
   tax_estimate: Calculation<{
-    federal_tax: number;
-    state_tax: number;
-    total_tax: number;
-    effective_rate: number;
-    ordinary_income_offset: number;
-    loss_carryforward: number;
+    exemption_used: number; exemption_remaining: number;
+    base_tax: number; surcharge: number; cess: number; total_tax: number;
+    effective_rate: number; loss_carry_forward: number; net_gain: number;
   }>;
   harvest: Calculation<{
-    opportunities: HarvestRow[];
+    loss_opportunities: HarvestRow[];
+    gain_opportunities: HarvestRow[];
     opportunity_count: number;
     total_harvestable_loss: number;
+    total_harvestable_gain: number;
     total_estimated_benefit: number;
+    loss_benefit: number;
+    gain_benefit: number;
+    exemption_remaining_after: number;
   }>;
   asset_location: Calculation<{
     by_tax_treatment: Record<string, number>;
@@ -56,7 +63,7 @@ type TaxPayload = {
     total_estimated_drag: number;
   }>;
   capital_gains_budget: Calculation<{ budget: number; used: number; remaining: number; utilisation: number; over_budget: boolean }>;
-  municipal_income: number;
+  tax_free_income: number;
   opportunities: {
     id: string;
     opportunity_type: string;
@@ -68,36 +75,31 @@ type TaxPayload = {
     deadline: string | null;
     assumptions: string[];
   }[];
-  rmd: {
+  nps_annuitization: {
     required_amount: number;
-    distributed_amount: number;
+    purchased_amount: number;
     remaining: number;
-    deadline: string;
     is_required: boolean;
     status: string;
-    accounts: { id: string; required_amount: number; distributed_amount: number; life_expectancy_factor: number; prior_year_end_balance: number; status: string }[];
-    calculation: Calculation<Record<string, unknown>> | null;
+    accounts: { id: string; corpus_at_exit: number; required_annuity_amount: number; annuity_purchased_amount: number; exit_deadline: string; status: string; annuity_provider: string | null }[];
   };
-  roth_conversion: Calculation<{
-    tax_due_now: number;
-    projected_balance_at_retirement: number;
-    tax_if_not_converted: number;
-    after_tax_value_roth: number;
-    after_tax_value_traditional: number;
-    net_benefit: number;
-    favourable: boolean;
+  regime_comparison: Calculation<{
+    old_regime_tax: number;
+    new_regime_tax: number;
+    recommended_regime: string;
+    annual_saving: number;
+    old_effective_rate: number;
+    new_effective_rate: number;
+    deduction_breakeven: number | null;
+  }> | null;
+  advance_tax: Calculation<{
+    is_liable: boolean;
+    instalments: { label: string; due_date: string; cumulative_percent: number; cumulative_due: number; instalment: number; is_past: boolean }[];
+    cumulative_due_to_date: number;
+    tax_paid: number;
+    shortfall: number;
+    on_schedule: boolean;
   }>;
-  wash_sale_windows: {
-    id: string;
-    account_name: string;
-    symbol: string;
-    security_name: string;
-    window_start: string;
-    window_end: string;
-    reason: string;
-    is_active: boolean;
-    days_remaining: number;
-  }[];
   charitable_securities: {
     holding_id: string;
     symbol: string;
@@ -110,8 +112,9 @@ type TaxPayload = {
   }[];
   projection: {
     tax_year: number;
-    estimated_ordinary_income_tax: number;
-    estimated_state_tax: number;
+    financial_year: string;
+    regime: string;
+    estimated_income_tax: number;
     estimated_capital_gains_tax: number;
     estimated_total_tax: number;
     effective_rate: number;
@@ -120,8 +123,16 @@ type TaxPayload = {
   };
 };
 
+type ChapterViaPayload = Calculation<{
+  sections: { section: string; label: string; limit: number; invested: number; claimed: number; headroom: number; fully_used: boolean }[];
+  total_deductions: number;
+  total_headroom: number;
+  sections_fully_used: number;
+}>;
+
 export default function TaxPage() {
   const { data, error, loading, refetch } = useApi<TaxPayload>("/api/tax");
+  const chapterVia = useApi<ChapterViaPayload>("/api/tax/chapter-via");
   const [tab, setTab] = useState("harvesting");
 
   return (
@@ -132,18 +143,19 @@ export default function TaxPage() {
           const estimate = tax.tax_estimate.result;
           const harvest = tax.harvest.result;
           const budget = tax.capital_gains_budget.result;
+          const nps = tax.nps_annuitization;
 
           return (
             <>
               <PageHeader
                 title="Tax Center"
-                description="Realised gains, harvesting candidates and year-end estimates. Every figure is a planning estimate, not a tax return calculation."
+                description="Realised gains, harvesting candidates and year-end estimates. Every figure is a planning estimate, not a computation of your income tax return."
                 meta={
                   <>
-                    <Badge tone="outline">Tax year {tax.tax_year}</Badge>
+                    <Badge tone="outline">FY {tax.financial_year}</Badge>
+                    <Badge tone="outline">{titleCase(tax.rates.regime)} regime</Badge>
                     <Badge tone="outline">Marginal {formatPercent(tax.rates.marginal, { decimals: 0 })}</Badge>
-                    <Badge tone="outline">LTCG {formatPercent(tax.rates.long_term_capital_gains, { decimals: 0 })}</Badge>
-                    <Badge tone="outline">State {formatPercent(tax.rates.state, { decimals: 2 })}</Badge>
+                    <Badge tone="outline">LTCG {formatPercent(tax.rates.long_term_capital_gains, { decimals: 1 })}</Badge>
                     <span className="text-xs text-ink-muted">As of {formatDate(tax.as_of)}</span>
                   </>
                 }
@@ -153,13 +165,13 @@ export default function TaxPage() {
                 <StatTile
                   label="Net realised gain"
                   value={formatCurrency(realized.net_gain, { compact: true })}
-                  hint={`${formatCurrency(realized.short_term_gain, { compact: true })} short · ${formatCurrency(realized.long_term_gain, { compact: true })} long`}
+                  hint={`${formatCurrency(realized.total_stcg, { compact: true })} short · ${formatCurrency(realized.total_ltcg, { compact: true })} long`}
                   icon={Receipt}
                 />
                 <StatTile
-                  label="Estimated tax on gains"
+                  label="Estimated capital gains tax"
                   value={formatCurrency(estimate.total_tax, { compact: true })}
-                  hint={`${formatCurrency(estimate.federal_tax, { compact: true })} federal · ${formatCurrency(estimate.state_tax, { compact: true })} state`}
+                  hint={`${formatCurrency(estimate.exemption_remaining, { compact: true })} of the 112A exemption unused`}
                 />
                 <StatTile
                   label="Harvesting opportunity"
@@ -176,20 +188,20 @@ export default function TaxPage() {
                 />
               </StatRow>
 
-              {/* --------------------------------------- RMD + wash sales */}
-              {tax.rmd.is_required && tax.rmd.remaining > 0 ? (
+              {/* --------------------------------------- NPS annuitization */}
+              {nps.is_required && nps.remaining > 0 ? (
                 <Card className="border-negative/25 bg-negative-soft/40">
                   <CardBody className="flex flex-wrap items-center gap-4 py-4">
                     <ShieldAlert className="size-5 shrink-0 text-negative" aria-hidden />
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-ink">Required minimum distribution outstanding</p>
+                      <p className="text-sm font-semibold text-ink">NPS annuitization not yet purchased</p>
                       <p className="mt-0.5 text-xs leading-5 text-ink-muted">
-                        {formatCurrency(tax.rmd.remaining)} of {formatCurrency(tax.rmd.required_amount)} has not yet
-                        been distributed. The deadline is {formatDate(tax.rmd.deadline, "long")}. A qualified
-                        charitable distribution can satisfy the remainder.
+                        {formatCurrency(nps.remaining)} of {formatCurrency(nps.required_amount)} required annuity
+                        purchase is outstanding. PFRDA exit regulations require at least 40% of the Tier I corpus to
+                        buy an annuity at exit.
                       </p>
                       <Progress
-                        value={tax.rmd.distributed_amount / tax.rmd.required_amount}
+                        value={nps.purchased_amount / Math.max(nps.required_amount, 1)}
                         tone="warning"
                         className="mt-2.5 max-w-md"
                         showTrackLabel
@@ -208,8 +220,9 @@ export default function TaxPage() {
                       { value: "harvesting", label: "Harvesting", count: harvest.opportunity_count },
                       { value: "opportunities", label: "Opportunities", count: tax.opportunities.length },
                       { value: "location", label: "Asset location", count: tax.asset_location.result.misplaced.length },
-                      { value: "roth", label: "Roth conversion" },
-                      { value: "charitable", label: "Charitable", count: tax.charitable_securities.length },
+                      { value: "regime", label: "Old vs new regime" },
+                      { value: "chapter_via", label: "Chapter VI-A" },
+                      { value: "charitable", label: "Charitable" },
                       { value: "projection", label: "Projection" },
                     ]}
                   />
@@ -220,74 +233,42 @@ export default function TaxPage() {
                     <>
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <p className="text-sm font-medium text-ink">Tax-loss harvesting candidates</p>
+                          <p className="text-sm font-medium text-ink">Loss and gain harvesting candidates</p>
                           <p className="mt-0.5 text-xs text-ink-muted">
-                            Open lots holding a loss above the review threshold. Each must clear a wash-sale check
-                            and be approved before any action is taken.
+                            India has no wash-sale rule: a loss can be booked and repurchased immediately, and a
+                            long-term equity gain can be booked inside the unused section 112A exemption to reset the
+                            cost base at no tax cost.
                           </p>
                         </div>
                         <div className="text-right">
-                          <p className="section-label">Total harvestable loss</p>
+                          <p className="section-label">Total estimated benefit</p>
                           <p className="text-lg font-semibold tabular text-ink">
-                            {formatCurrency(harvest.total_harvestable_loss, { compact: true })}
+                            {formatCurrency(harvest.total_estimated_benefit, { compact: true })}
                           </p>
                         </div>
                       </div>
 
-                      {harvest.opportunities.length === 0 ? (
-                        <EmptyState title="No harvesting candidates" description="No open lot currently holds a loss above the threshold." />
-                      ) : (
-                        <div className="scroll-x rounded-md border border-border">
-                          <Table>
-                            <THead>
-                              <TR>
-                                <TH>Security</TH>
-                                <TH>Account</TH>
-                                <TH align="right">Quantity</TH>
-                                <TH align="right">Cost basis</TH>
-                                <TH align="right">Market value</TH>
-                                <TH align="right">Unrealised loss</TH>
-                                <TH>Period</TH>
-                                <TH align="right">Est. benefit</TH>
-                                <TH>Wash sale</TH>
-                                <TH>Replacement</TH>
-                              </TR>
-                            </THead>
-                            <tbody>
-                              {harvest.opportunities.map((row) => (
-                                <TR key={row.lot_id}>
-                                  <TD>
-                                    <span className="font-medium">{row.symbol}</span>
-                                    <span className="mt-0.5 block max-w-[14rem] truncate text-xs text-ink-muted">{row.name}</span>
-                                    <span className="mt-0.5 block text-2xs text-ink-subtle">
-                                      Acquired {formatDate(row.acquired_on)}
-                                    </span>
-                                  </TD>
-                                  <TD className="text-xs text-ink-muted">{row.account_name}</TD>
-                                  <TD align="right" numeric>{formatNumber(row.quantity, 2)}</TD>
-                                  <TD align="right" numeric>{formatCurrency(row.cost_basis)}</TD>
-                                  <TD align="right" numeric>{formatCurrency(row.market_value)}</TD>
-                                  <TD align="right" numeric className="font-medium text-negative">
-                                    {formatCurrency(row.unrealized_loss)}
-                                  </TD>
-                                  <TD>
-                                    <Badge tone={row.holding_period === "long_term" ? "positive" : "neutral"} size="sm">
-                                      {row.holding_period === "long_term" ? "Long" : "Short"}
-                                    </Badge>
-                                  </TD>
-                                  <TD align="right" numeric className="font-medium text-positive">
-                                    {formatCurrency(row.estimated_tax_benefit)}
-                                  </TD>
-                                  <TD>
-                                    <StatusBadge status={row.wash_sale_risk} />
-                                  </TD>
-                                  <TD className="text-xs">{row.replacement_symbol ?? "—"}</TD>
-                                </TR>
-                              ))}
-                            </tbody>
-                          </Table>
-                        </div>
-                      )}
+                      <div>
+                        <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                          <TrendingDown className="size-3.5" aria-hidden /> Loss harvest candidates
+                        </p>
+                        {harvest.loss_opportunities.length === 0 ? (
+                          <EmptyState title="No loss candidates" description="No open lot currently holds a loss above the review threshold." />
+                        ) : (
+                          <HarvestTable rows={harvest.loss_opportunities} negative />
+                        )}
+                      </div>
+
+                      <div>
+                        <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                          <TrendingUp className="size-3.5" aria-hidden /> Gain harvest candidates (section 112A exemption)
+                        </p>
+                        {harvest.gain_opportunities.length === 0 ? (
+                          <EmptyState title="No gain candidates" description="No long-term equity lot qualifies, or the exemption is already used." />
+                        ) : (
+                          <HarvestTable rows={harvest.gain_opportunities} negative={false} />
+                        )}
+                      </div>
 
                       <div className="rounded-md border border-info/25 bg-info-soft px-3.5 py-3">
                         <p className="text-xs font-semibold text-info">Identify → Analyse → Review → Approve → Simulated action</p>
@@ -384,7 +365,7 @@ export default function TaxPage() {
                                     </TD>
                                     <TD className="text-xs">{titleCase(row.asset_class)}</TD>
                                     <TD><Badge tone="warning" size="sm">{titleCase(row.current_location)}</Badge></TD>
-                                    <TD><Badge tone="positive" size="sm">{titleCase(row.preferred_location)}</Badge></TD>
+                                    <TD><Badge tone="positive" size="sm">{row.preferred_location}</Badge></TD>
                                     <TD align="right" numeric>{formatCurrency(row.market_value, { compact: true })}</TD>
                                     <TD align="right" numeric className="font-medium">{formatCurrency(row.estimated_annual_drag)}</TD>
                                   </TR>
@@ -398,29 +379,86 @@ export default function TaxPage() {
                     </>
                   ) : null}
 
-                  {tab === "roth" ? (
-                    <>
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm text-ink-muted">
-                          Illustrative comparison for a $100,000 conversion, paying the tax from taxable assets.
-                        </p>
-                        <Badge tone={tax.roth_conversion.result.favourable ? "positive" : "warning"}>
-                          {tax.roth_conversion.result.favourable ? "Favourable on these assumptions" : "Not favourable on these assumptions"}
-                        </Badge>
-                      </div>
-                      <KeyValue
-                        columns={2}
-                        items={[
-                          { label: "Tax due on conversion now", value: formatCurrency(tax.roth_conversion.result.tax_due_now) },
-                          { label: "Projected balance at retirement", value: formatCurrency(tax.roth_conversion.result.projected_balance_at_retirement, { compact: true }) },
-                          { label: "Tax if left pre-tax", value: formatCurrency(tax.roth_conversion.result.tax_if_not_converted, { compact: true }) },
-                          { label: "After-tax value — Roth", value: formatCurrency(tax.roth_conversion.result.after_tax_value_roth, { compact: true }) },
-                          { label: "After-tax value — Traditional", value: formatCurrency(tax.roth_conversion.result.after_tax_value_traditional, { compact: true }) },
-                          { label: "Net benefit", value: formatCurrency(tax.roth_conversion.result.net_benefit, { compact: true, signed: true }) },
-                        ]}
-                      />
-                      <CalcDisclosure calculation={tax.roth_conversion} />
-                    </>
+                  {tab === "regime" ? (
+                    tax.regime_comparison ? (
+                      <>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <p className="text-sm text-ink-muted">
+                            Every taxpayer chooses the old or the new regime afresh each financial year. The new
+                            regime is the default.
+                          </p>
+                          <Badge tone="positive">
+                            {titleCase(tax.regime_comparison.result.recommended_regime)} regime recommended
+                          </Badge>
+                        </div>
+                        <KeyValue
+                          columns={2}
+                          items={[
+                            { label: "Old regime tax", value: formatCurrency(tax.regime_comparison.result.old_regime_tax) },
+                            { label: "New regime tax", value: formatCurrency(tax.regime_comparison.result.new_regime_tax) },
+                            { label: "Annual saving", value: formatCurrency(tax.regime_comparison.result.annual_saving) },
+                            { label: "Old effective rate", value: formatPercent(tax.regime_comparison.result.old_effective_rate, { decimals: 1 }) },
+                            { label: "New effective rate", value: formatPercent(tax.regime_comparison.result.new_effective_rate, { decimals: 1 }) },
+                            {
+                              label: "Deductions needed for the old regime to win",
+                              value: tax.regime_comparison.result.deduction_breakeven != null
+                                ? formatCurrency(tax.regime_comparison.result.deduction_breakeven, { compact: true })
+                                : "Not achievable",
+                            },
+                          ]}
+                        />
+                        <CalcDisclosure calculation={tax.regime_comparison} />
+                      </>
+                    ) : (
+                      <EmptyState title="No income on file" description="Add annual income to compare the two regimes." />
+                    )
+                  ) : null}
+
+                  {tab === "chapter_via" ? (
+                    <DataState loading={chapterVia.loading} error={chapterVia.error} data={chapterVia.data}>
+                      {(via) => (
+                        <>
+                          <KeyValue
+                            columns={3}
+                            items={[
+                              { label: "Total deductions", value: formatCurrency(via.result.total_deductions) },
+                              { label: "Headroom remaining", value: formatCurrency(via.result.total_headroom) },
+                              { label: "Sections fully used", value: `${via.result.sections_fully_used} of ${via.result.sections.length}` },
+                            ]}
+                          />
+                          <div className="scroll-x rounded-md border border-border">
+                            <Table>
+                              <THead>
+                                <TR>
+                                  <TH>Section</TH>
+                                  <TH align="right">Limit</TH>
+                                  <TH align="right">Invested</TH>
+                                  <TH align="right">Claimed</TH>
+                                  <TH align="right">Headroom</TH>
+                                </TR>
+                              </THead>
+                              <tbody>
+                                {via.result.sections.map((row) => (
+                                  <TR key={row.section}>
+                                    <TD>
+                                      <span className="font-medium">{row.section}</span>
+                                      <span className="mt-0.5 block text-xs text-ink-muted">{row.label}</span>
+                                    </TD>
+                                    <TD align="right" numeric>{formatCurrency(row.limit, { compact: true })}</TD>
+                                    <TD align="right" numeric>{formatCurrency(row.invested, { compact: true })}</TD>
+                                    <TD align="right" numeric className="font-medium">{formatCurrency(row.claimed, { compact: true })}</TD>
+                                    <TD align="right" numeric className={cn(row.fully_used ? "text-ink-subtle" : "text-positive")}>
+                                      {row.fully_used ? "Fully used" : formatCurrency(row.headroom, { compact: true })}
+                                    </TD>
+                                  </TR>
+                                ))}
+                              </tbody>
+                            </Table>
+                          </div>
+                          <CalcDisclosure calculation={via} />
+                        </>
+                      )}
+                    </DataState>
                   ) : null}
 
                   {tab === "charitable" ? (
@@ -429,8 +467,8 @@ export default function TaxPage() {
                     ) : (
                       <>
                         <p className="text-sm text-ink-muted">
-                          Gifting these long-term appreciated positions avoids the capital gain entirely while
-                          preserving the deduction.
+                          Gifting these long-term appreciated positions to a registered charity avoids the capital
+                          gain entirely while the household can claim relief under section 80G.
                         </p>
                         <div className="scroll-x rounded-md border border-border">
                           <Table>
@@ -470,12 +508,12 @@ export default function TaxPage() {
                       <KeyValue
                         columns={2}
                         items={[
-                          { label: "Estimated ordinary income tax", value: formatCurrency(tax.projection.estimated_ordinary_income_tax, { compact: true }) },
-                          { label: "Estimated state tax", value: formatCurrency(tax.projection.estimated_state_tax, { compact: true }) },
+                          { label: "Estimated income tax", value: formatCurrency(tax.projection.estimated_income_tax, { compact: true }) },
                           { label: "Estimated capital gains tax", value: formatCurrency(tax.projection.estimated_capital_gains_tax, { compact: true }) },
                           { label: "Estimated total", value: formatCurrency(tax.projection.estimated_total_tax, { compact: true }) },
                           { label: "Effective rate", value: formatPercent(tax.projection.effective_rate, { decimals: 1 }) },
-                          { label: "Municipal income (tax exempt)", value: formatCurrency(tax.municipal_income) },
+                          { label: "Regime", value: titleCase(tax.projection.regime) },
+                          { label: "Tax-free income", value: formatCurrency(tax.tax_free_income) },
                         ]}
                       />
                       <div>
@@ -499,104 +537,103 @@ export default function TaxPage() {
                 </CardBody>
               </Card>
 
-              {/* ---------------------------------------- Wash sale + RMD */}
+              {/* --------------------------------- Advance tax + NPS annuitization */}
               <div className="grid gap-6 xl:grid-cols-2">
                 <Card>
                   <CardHeader
-                    title="Wash-sale monitoring"
-                    description="A loss is disallowed if a substantially identical security is bought within 30 days either side of the sale."
+                    title="Advance tax schedule"
+                    description="Section 208 instalments: 15%, 45%, 75% and 100% of the estimated annual liability."
                   />
-                  {tax.wash_sale_windows.length === 0 ? (
-                    <EmptyState title="No active wash-sale windows" description="Nothing currently blocks a loss sale." />
-                  ) : (
-                    <ul className="divide-y divide-border">
-                      {tax.wash_sale_windows.map((window) => (
-                        <li key={window.id} className="px-5 py-3.5">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="flex items-center gap-2 text-sm font-medium text-ink">
-                                {window.is_active ? <AlertTriangle className="size-3.5 text-warning" aria-hidden /> : null}
-                                {window.symbol} · {window.account_name}
-                              </p>
-                              <p className="mt-0.5 text-xs leading-5 text-ink-muted">{window.reason}</p>
-                              <p className="mt-1 text-2xs text-ink-subtle">
-                                {formatDate(window.window_start)} – {formatDate(window.window_end)}
-                              </p>
-                            </div>
-                            <Badge tone={window.is_active ? "warning" : "neutral"}>
-                              {window.is_active ? `${window.days_remaining}d left` : "Expired"}
-                            </Badge>
+                  <CardBody className="space-y-4">
+                    <KeyValue
+                      columns={2}
+                      items={[
+                        { label: "Liable to pay", value: tax.advance_tax.result.is_liable ? "Yes" : "No" },
+                        { label: "Due to date", value: formatCurrency(tax.advance_tax.result.cumulative_due_to_date) },
+                        { label: "Paid", value: formatCurrency(tax.advance_tax.result.tax_paid) },
+                        { label: "Shortfall", value: formatCurrency(tax.advance_tax.result.shortfall) },
+                      ]}
+                    />
+                    <ul className="divide-y divide-border rounded-md border border-border">
+                      {tax.advance_tax.result.instalments.map((row) => (
+                        <li key={row.label} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                          <div>
+                            <p className="text-sm font-medium text-ink">{row.label}</p>
+                            <p className="text-2xs text-ink-subtle">{formatDate(row.due_date)} · {formatPercent(row.cumulative_percent, { decimals: 0 })} cumulative</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-medium tabular text-ink">{formatCurrency(row.cumulative_due, { compact: true })}</p>
+                            <Badge tone={row.is_past ? "neutral" : "outline"} size="sm">{row.is_past ? "Past" : "Upcoming"}</Badge>
                           </div>
                         </li>
                       ))}
                     </ul>
-                  )}
+                    <CalcDisclosure calculation={tax.advance_tax} />
+                  </CardBody>
                 </Card>
 
                 <Card>
-                  <CardHeader title="Required minimum distributions" description="Calculated from the IRS Uniform Lifetime Table." />
-                  {!tax.rmd.is_required ? (
-                    <EmptyState title="No distribution required" description="No account owner in this household has reached the required beginning age." />
+                  <CardHeader title="NPS annuitization" description="At least 40% of the Tier I corpus must buy an annuity at exit." />
+                  {!nps.is_required ? (
+                    <EmptyState title="Not yet applicable" description="No member in this household is within five years of NPS exit." />
                   ) : (
                     <CardBody className="space-y-4">
                       <KeyValue
                         items={[
-                          { label: "Required this year", value: formatCurrency(tax.rmd.required_amount) },
-                          { label: "Distributed to date", value: formatCurrency(tax.rmd.distributed_amount) },
-                          { label: "Remaining", value: formatCurrency(tax.rmd.remaining) },
-                          { label: "Deadline", value: formatDate(tax.rmd.deadline, "long") },
+                          { label: "Required this year", value: formatCurrency(nps.required_amount) },
+                          { label: "Purchased to date", value: formatCurrency(nps.purchased_amount) },
+                          { label: "Remaining", value: formatCurrency(nps.remaining) },
                         ]}
                       />
                       <Progress
-                        value={tax.rmd.distributed_amount / Math.max(tax.rmd.required_amount, 1)}
-                        tone={tax.rmd.remaining > 0 ? "warning" : "positive"}
+                        value={nps.purchased_amount / Math.max(nps.required_amount, 1)}
+                        tone={nps.remaining > 0 ? "warning" : "positive"}
                         showTrackLabel
                       />
-                      {tax.rmd.accounts.length > 0 ? (
+                      {nps.accounts.length > 0 ? (
                         <div className="scroll-x rounded-md border border-border">
                           <Table>
                             <THead>
                               <TR>
-                                <TH>Prior year-end balance</TH>
-                                <TH align="right">Factor</TH>
+                                <TH>Corpus at exit</TH>
                                 <TH align="right">Required</TH>
-                                <TH align="right">Distributed</TH>
+                                <TH align="right">Purchased</TH>
+                                <TH>Exit deadline</TH>
                               </TR>
                             </THead>
                             <tbody>
-                              {tax.rmd.accounts.map((row) => (
+                              {nps.accounts.map((row) => (
                                 <TR key={row.id}>
-                                  <TD numeric>{formatCurrency(row.prior_year_end_balance, { compact: true })}</TD>
-                                  <TD align="right" numeric>{row.life_expectancy_factor.toFixed(1)}</TD>
-                                  <TD align="right" numeric className="font-medium">{formatCurrency(row.required_amount)}</TD>
-                                  <TD align="right" numeric>{formatCurrency(row.distributed_amount)}</TD>
+                                  <TD numeric>{formatCurrency(row.corpus_at_exit, { compact: true })}</TD>
+                                  <TD align="right" numeric className="font-medium">{formatCurrency(row.required_annuity_amount)}</TD>
+                                  <TD align="right" numeric>{formatCurrency(row.annuity_purchased_amount)}</TD>
+                                  <TD className="text-xs">{formatDate(row.exit_deadline, "long")}</TD>
                                 </TR>
                               ))}
                             </tbody>
                           </Table>
                         </div>
                       ) : null}
-                      {tax.rmd.calculation ? <CalcDisclosure calculation={tax.rmd.calculation} /> : null}
                     </CardBody>
                   )}
                 </Card>
               </div>
 
-              <Section title="Realised gains" description={`Settled sales recorded in ${tax.tax_year}.`}>
+              <Section title="Realised gains" description={`Settled sales recorded in FY ${tax.financial_year}.`}>
                 <Card>
                   <CardBody className="space-y-4">
                     <KeyValue
                       columns={3}
                       items={[
-                        { label: "Short-term gain", value: formatCurrency(realized.short_term_gain) },
-                        { label: "Long-term gain", value: formatCurrency(realized.long_term_gain) },
+                        { label: "Short-term gain", value: formatCurrency(realized.total_stcg) },
+                        { label: "Long-term gain", value: formatCurrency(realized.total_ltcg) },
                         { label: "Net gain", value: formatCurrency(realized.net_gain) },
-                        { label: "Federal tax estimate", value: formatCurrency(estimate.federal_tax) },
-                        { label: "State tax estimate", value: formatCurrency(estimate.state_tax) },
+                        { label: "Capital gains tax estimate", value: formatCurrency(estimate.total_tax) },
+                        { label: "Surcharge + cess", value: formatCurrency(estimate.surcharge + estimate.cess) },
                         {
-                          label: "Loss carryforward",
-                          value: formatCurrency(estimate.loss_carryforward),
-                          hint: estimate.ordinary_income_offset ? `${formatCurrency(estimate.ordinary_income_offset)} offsets ordinary income` : undefined,
+                          label: "Loss carried forward",
+                          value: formatCurrency(estimate.loss_carry_forward),
+                          hint: "Usable for eight assessment years if the return is filed on time.",
                         },
                       ]}
                     />
@@ -608,6 +645,55 @@ export default function TaxPage() {
           );
         }}
       </DataState>
+    </div>
+  );
+}
+
+function HarvestTable({ rows, negative }: { rows: HarvestRow[]; negative: boolean }) {
+  return (
+    <div className="scroll-x rounded-md border border-border">
+      <Table>
+        <THead>
+          <TR>
+            <TH>Security</TH>
+            <TH>Account</TH>
+            <TH align="right">Quantity</TH>
+            <TH align="right">Cost basis</TH>
+            <TH align="right">Market value</TH>
+            <TH align="right">{negative ? "Unrealised loss" : "Unrealised gain"}</TH>
+            <TH>Period</TH>
+            <TH align="right">Est. benefit</TH>
+            <TH>Replacement</TH>
+          </TR>
+        </THead>
+        <tbody>
+          {rows.map((row) => (
+            <TR key={row.lot_id}>
+              <TD>
+                <span className="font-medium">{row.symbol}</span>
+                <span className="mt-0.5 block max-w-[14rem] truncate text-xs text-ink-muted">{row.name}</span>
+                <span className="mt-0.5 block text-2xs text-ink-subtle">Acquired {formatDate(row.acquired_on)}</span>
+              </TD>
+              <TD className="text-xs text-ink-muted">{row.account_name}</TD>
+              <TD align="right" numeric>{formatNumber(row.quantity, 2)}</TD>
+              <TD align="right" numeric>{formatCurrency(row.cost_basis)}</TD>
+              <TD align="right" numeric>{formatCurrency(row.market_value)}</TD>
+              <TD align="right" numeric className={cn("font-medium", negative ? "text-negative" : "text-positive")}>
+                {formatCurrency(negative ? row.unrealized_gain : row.harvestable_gain ?? row.unrealized_gain)}
+              </TD>
+              <TD>
+                <Badge tone={row.holding_period === "long_term" ? "positive" : "neutral"} size="sm">
+                  {row.holding_period === "long_term" ? "Long" : "Short"}
+                </Badge>
+              </TD>
+              <TD align="right" numeric className="font-medium text-positive">
+                {formatCurrency(row.estimated_tax_benefit)}
+              </TD>
+              <TD className="text-xs">{row.replacement_symbol ?? "—"}</TD>
+            </TR>
+          ))}
+        </tbody>
+      </Table>
     </div>
   );
 }

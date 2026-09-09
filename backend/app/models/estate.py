@@ -106,6 +106,8 @@ class Charity(BaseModel):
     location: Mapped[str | None] = mapped_column(String(120))
     rating: Mapped[float | None] = mapped_column(Float)
     is_qualified: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Section 80G category: 100_no_cap, 50_no_cap, 100_capped or 50_capped.
+    section_80g_category: Mapped[str] = mapped_column(String(16), default="50_capped")
 
 
 class DAF(BaseModel):

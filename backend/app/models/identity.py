@@ -99,11 +99,13 @@ class Client(BaseModel):
     household_id: Mapped[str] = mapped_column(ForeignKey("households.id", ondelete="CASCADE"), index=True)
     full_name: Mapped[str] = mapped_column(String(160), index=True)
     birth_date: Mapped[date | None] = mapped_column(Date())
-    retirement_age: Mapped[int] = mapped_column(default=65)
-    filing_status: Mapped[str] = mapped_column(String(32), default="married_joint")
-    marginal_tax_rate: Mapped[float] = mapped_column(Float, default=0.35)
-    ltcg_tax_rate: Mapped[float] = mapped_column(Float, default=0.20)
-    state_tax_rate: Mapped[float] = mapped_column(Float, default=0.05)
+    retirement_age: Mapped[int] = mapped_column(default=60)
+    # "individual", "senior_citizen" (60+), "super_senior_citizen" (80+), "huf"
+    taxpayer_type: Mapped[str] = mapped_column(String(32), default="individual")
+    # Chosen afresh each year: "old" (deductions available) or "new" (lower slabs).
+    tax_regime: Mapped[str] = mapped_column(String(16), default="new")
+    marginal_tax_rate: Mapped[float] = mapped_column(Float, default=0.30)
+    ltcg_tax_rate: Mapped[float] = mapped_column(Float, default=0.125)
     annual_income: Mapped[float] = mapped_column(Float, default=0.0)
     annual_savings: Mapped[float] = mapped_column(Float, default=0.0)
     risk_tolerance: Mapped[str] = mapped_column(String(32), default="moderate")

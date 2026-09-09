@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Bell, Check, ChevronDown, LogOut, Menu, Moon, Sun, UserRound } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Bell, Check, ChevronDown, LockKeyhole, LogOut, Menu, Moon, RefreshCw, Sun, UserRound } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatRelative } from "@/lib/format";
-import type { Notification } from "@/lib/types";
+import { DEMO_PASSWORD, type DemoAccount, type Notification } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge, Button } from "@/components/ui";
 import { SeverityBadge } from "@/components/shared/indicators";
@@ -188,12 +189,39 @@ function NotificationCenter() {
 /* ---------------------------------------------------------------- Account */
 
 function UserMenu() {
-  const { user, signOut } = useAuth();
+  const router = useRouter();
+  const { user, signIn, signOut } = useAuth();
   const [open, setOpen] = useState(false);
+  const [demoAccounts, setDemoAccounts] = useState<DemoAccount[]>([]);
+  const [switching, setSwitching] = useState<string | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   useOutsideClick(menuRef, () => setOpen(false));
 
+  useEffect(() => {
+    api
+      .get<DemoAccount[]>("/api/auth/demo-accounts")
+      .then(setDemoAccounts)
+      .catch(() => setDemoAccounts([]));
+  }, []);
+
   if (!user) return null;
+
+  const otherAccounts = demoAccounts.filter((account) => account.email !== user.email);
+
+  const switchTo = async (account: DemoAccount) => {
+    setSwitchError(null);
+    setSwitching(account.email);
+    try {
+      const profile = await signIn(account.email, DEMO_PASSWORD, true);
+      setOpen(false);
+      router.push(profile.home_route);
+    } catch (caught) {
+      setSwitchError(caught instanceof ApiError ? caught.message : "Could not switch accounts.");
+    } finally {
+      setSwitching(null);
+    }
+  };
 
   return (
     <div className="relative" ref={menuRef}>
@@ -213,7 +241,7 @@ function UserMenu() {
       </button>
 
       {open ? (
-        <div className="absolute right-0 top-full z-30 mt-2 w-64 animate-slide-up overflow-hidden rounded-lg border border-border bg-surface shadow-pop">
+        <div className="absolute right-0 top-full z-30 mt-2 w-72 animate-slide-up overflow-hidden rounded-lg border border-border bg-surface shadow-pop">
           <div className="border-b border-border px-4 py-3">
             <p className="text-sm font-semibold text-ink">{user.full_name}</p>
             <p className="truncate text-xs text-ink-muted">{user.email}</p>
@@ -251,6 +279,44 @@ function UserMenu() {
               Sign out
             </button>
           </div>
+
+          {otherAccounts.length > 0 ? (
+            <div className="border-t border-border">
+              <p className="px-4 pt-2.5 text-2xs font-semibold uppercase tracking-wide text-ink-subtle">
+                Switch demo account
+              </p>
+              {switchError ? <p className="px-4 pt-1 text-xs text-negative">{switchError}</p> : null}
+              <ul className="max-h-64 overflow-y-auto p-1.5">
+                {otherAccounts.map((account) => (
+                  <li key={account.email}>
+                    <button
+                      onClick={() => switchTo(account)}
+                      disabled={switching !== null}
+                      className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium text-ink">{account.label}</span>
+                        <span className="block truncate text-2xs text-ink-subtle">{account.email}</span>
+                      </span>
+                      {switching === account.email ? (
+                        <RefreshCw className="size-3.5 shrink-0 animate-spin text-ink-subtle" aria-hidden />
+                      ) : (
+                        <Badge tone="outline" size="sm">
+                          {account.role_label}
+                        </Badge>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="flex items-start gap-1.5 border-t border-border bg-surface-muted/50 px-4 py-2 text-2xs text-ink-muted">
+                <LockKeyhole className="mt-0.5 size-3 shrink-0 text-ink-subtle" aria-hidden />
+                <span>
+                  Demo password <code className="rounded bg-surface px-1 py-0.5 font-mono text-ink">{DEMO_PASSWORD}</code> for every account.
+                </span>
+              </p>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

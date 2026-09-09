@@ -182,12 +182,12 @@ class TestDocumentClassification:
     @pytest.mark.parametrize(
         "filename,category,doc_type",
         [
-            ("2025_Tax_Return.pdf", "tax", "Tax Return"),
-            ("Form_1099_Consolidated_2025.pdf", "tax", "Form 1099"),
-            ("Revocable_Trust_Agreement.pdf", "estate", "Trust Agreement"),
-            ("Durable_Power_of_Attorney.pdf", "estate", "Power of Attorney"),
-            ("Umbrella_Liability_Policy.pdf", "insurance", "Insurance Policy"),
-            ("401k_Annual_Statement.pdf", "retirement", "Retirement Statement"),
+            ("Form16_AY2025-26.pdf", "tax", "Form 16"),
+            ("Capital_Gains_Statement_2025.pdf", "tax", "Capital Gains Statement"),
+            ("Family_Trust_Deed.pdf", "estate", "Trust Agreement"),
+            ("Registered_Power_of_Attorney.pdf", "estate", "Power of Attorney"),
+            ("Health_Insurance_Policy.pdf", "insurance", "Insurance Policy"),
+            ("EPF_Passbook.pdf", "retirement", "Retirement Statement"),
         ],
     )
     def test_known_document_shapes_are_recognised(self, filename, category, doc_type):
@@ -197,7 +197,7 @@ class TestDocumentClassification:
         assert result.confidence >= 0.85
 
     def test_a_year_in_the_filename_is_detected(self):
-        assert MockAIService().classify_document("2025_Tax_Return.pdf").detected_year == 2025
+        assert MockAIService().classify_document("Capital_Gains_Statement_2025.pdf").detected_year == 2025
 
     def test_an_unknown_document_defers_to_a_person(self):
         result = MockAIService().classify_document("IMG_4821.pdf")
@@ -206,7 +206,7 @@ class TestDocumentClassification:
         assert "person should categorise" in result.reasons[0]
 
     def test_the_source_is_never_presented_as_an_external_model(self):
-        assert MockAIService().classify_document("2025_Tax_Return.pdf").source == "mock_rules"
+        assert MockAIService().classify_document("Form16_AY2025-26.pdf").source == "mock_rules"
 
 
 class TestGroundedAnswers:

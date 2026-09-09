@@ -15,10 +15,11 @@ import {
   BadgeCheck,
   CalendarDays,
   FileText,
+  Lightbulb,
   MessageSquare,
+  Radar,
   Receipt,
   Scale,
-  Sparkles,
   Target,
   TrendingUp,
   Users,
@@ -155,7 +156,7 @@ export default function Client360Page({ params }: { params: Promise<{ id: string
                     </Button>
                     <Link href={`/wealthagent?household_id=${id}`}>
                       <Button variant="primary" size="sm">
-                        <Sparkles />
+                        <Radar />
                         WealthAgent
                       </Button>
                     </Link>
@@ -736,7 +737,7 @@ function Panel({
 
 function Recommendations({ client }: { client: Client360 }) {
   if (client.recommendations.length === 0) {
-    return <EmptyState icon={Sparkles} title="No recommendations raised" description="Raise one from the WealthAgent workspace." />;
+    return <EmptyState icon={Lightbulb} title="No recommendations raised" description="Raise one from the WealthAgent workspace." />;
   }
 
   return (

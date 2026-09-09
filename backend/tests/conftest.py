@@ -32,14 +32,14 @@ from app.seeds.seeder import DemoSeeder  # noqa: E402
 DEMO_PASSWORD = settings.demo_password
 
 ACCOUNTS = {
-    "client": "sarah.johnson@example.com",
-    "advisor": "marcus.webb@nexgile.example",
-    "compliance": "priya.raman@nexgile.example",
-    "admin": "ellen.sorensen@nexgile.example",
-    "sponsor": "diane.ellis@brightpath.example",
-    "participant": "andre.fitzgerald@brightpath.example",
-    "tax_specialist": "hana.mori@nexgile.example",
-    "investment_team": "tobias.frank@nexgile.example",
+    "client": "priya.sharma@example.com",
+    "advisor": "arjun.mehta@nexgile.example",
+    "compliance": "neha.kapoor@nexgile.example",
+    "admin": "suresh.pillai@nexgile.example",
+    "sponsor": "deepa.krishnan@brightpath.example",
+    "participant": "nikhil.verma@brightpath.example",
+    "tax_specialist": "meera.subramanian@nexgile.example",
+    "investment_team": "rajesh.bhatt@nexgile.example",
 }
 
 
