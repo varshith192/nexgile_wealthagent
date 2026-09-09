@@ -41,6 +41,7 @@ CREATE TABLE charities (
 	location VARCHAR(120), 
 	rating FLOAT, 
 	is_qualified BOOLEAN NOT NULL, 
+	section_80g_category VARCHAR(16) NOT NULL, 
 	id VARCHAR(36) NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
@@ -116,7 +117,7 @@ CREATE TABLE securities (
 	beta FLOAT NOT NULL, 
 	annualised_volatility FLOAT NOT NULL, 
 	esg_score FLOAT, 
-	is_municipal BOOLEAN NOT NULL, 
+	is_tax_free BOOLEAN NOT NULL, 
 	substantially_identical_to VARCHAR(24), 
 	price_as_of TIMESTAMP WITH TIME ZONE, 
 	price_status VARCHAR(24) NOT NULL, 
@@ -243,7 +244,7 @@ CREATE TABLE sponsors (
 	name VARCHAR(160) NOT NULL, 
 	industry VARCHAR(80) NOT NULL, 
 	employee_count INTEGER NOT NULL, 
-	ein_masked VARCHAR(24), 
+	pan_masked VARCHAR(24), 
 	location VARCHAR(120), 
 	relationship_since DATE, 
 	primary_contact_id VARCHAR(36), 
@@ -318,10 +319,10 @@ CREATE TABLE clients (
 	full_name VARCHAR(160) NOT NULL, 
 	birth_date DATE, 
 	retirement_age INTEGER NOT NULL, 
-	filing_status VARCHAR(32) NOT NULL, 
+	taxpayer_type VARCHAR(32) NOT NULL, 
+	tax_regime VARCHAR(16) NOT NULL, 
 	marginal_tax_rate FLOAT NOT NULL, 
 	ltcg_tax_rate FLOAT NOT NULL, 
-	state_tax_rate FLOAT NOT NULL, 
 	annual_income FLOAT NOT NULL, 
 	annual_savings FLOAT NOT NULL, 
 	risk_tolerance VARCHAR(32) NOT NULL, 
@@ -811,7 +812,7 @@ CREATE TABLE investment_options (
 	peer_rank_percentile INTEGER NOT NULL, 
 	ips_status VARCHAR(24) NOT NULL, 
 	watch_reason TEXT, 
-	is_qdia BOOLEAN NOT NULL, 
+	is_default_scheme BOOLEAN NOT NULL, 
 	revenue_share_bps INTEGER NOT NULL, 
 	id VARCHAR(36) NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
@@ -832,9 +833,9 @@ CREATE TABLE participants (
 	hire_date DATE NOT NULL, 
 	annual_salary FLOAT NOT NULL, 
 	deferral_rate FLOAT NOT NULL, 
-	roth_deferral_rate FLOAT NOT NULL, 
+	vpf_contribution_rate FLOAT NOT NULL, 
 	account_balance FLOAT NOT NULL, 
-	roth_balance FLOAT NOT NULL, 
+	vpf_balance FLOAT NOT NULL, 
 	employer_balance FLOAT NOT NULL, 
 	vested_percentage FLOAT NOT NULL, 
 	is_hce BOOLEAN NOT NULL, 
@@ -952,7 +953,7 @@ CREATE TABLE contributions (
 	period_start DATE NOT NULL, 
 	period_end DATE NOT NULL, 
 	employee_pretax FLOAT NOT NULL, 
-	employee_roth FLOAT NOT NULL, 
+	employee_vpf FLOAT NOT NULL, 
 	employee_catchup FLOAT NOT NULL, 
 	employer_match FLOAT NOT NULL, 
 	employer_profit_sharing FLOAT NOT NULL, 
@@ -1098,6 +1099,29 @@ CREATE INDEX ix_holdings_portfolio_id ON holdings (portfolio_id);
 
 CREATE INDEX ix_holdings_security ON holdings (security_id);
 
+CREATE TABLE nps_annuitizations (
+	client_id VARCHAR(36) NOT NULL, 
+	account_id VARCHAR(36) NOT NULL, 
+	tax_year INTEGER NOT NULL, 
+	corpus_at_exit FLOAT NOT NULL, 
+	required_annuity_amount FLOAT NOT NULL, 
+	annuity_purchased_amount FLOAT NOT NULL, 
+	exit_deadline DATE NOT NULL, 
+	status VARCHAR(24) NOT NULL, 
+	annuity_provider VARCHAR(120), 
+	method VARCHAR(120) NOT NULL, 
+	id VARCHAR(36) NOT NULL, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(client_id) REFERENCES clients (id) ON DELETE CASCADE, 
+	FOREIGN KEY(account_id) REFERENCES accounts (id) ON DELETE CASCADE
+);
+
+CREATE INDEX ix_nps_annuitizations_client_id ON nps_annuitizations (client_id);
+
+CREATE INDEX ix_nps_annuitizations_tax_year ON nps_annuitizations (tax_year);
+
 CREATE TABLE participant_loans (
 	participant_id VARCHAR(36) NOT NULL, 
 	original_amount FLOAT NOT NULL, 
@@ -1194,30 +1218,6 @@ CREATE INDEX ix_recommendations_household_id ON recommendations (household_id);
 CREATE INDEX ix_recommendations_household_status ON recommendations (household_id, status);
 
 CREATE INDEX ix_recommendations_status ON recommendations (status);
-
-CREATE TABLE rmds (
-	client_id VARCHAR(36) NOT NULL, 
-	account_id VARCHAR(36) NOT NULL, 
-	tax_year INTEGER NOT NULL, 
-	prior_year_end_balance FLOAT NOT NULL, 
-	life_expectancy_factor FLOAT NOT NULL, 
-	required_amount FLOAT NOT NULL, 
-	distributed_amount FLOAT NOT NULL, 
-	deadline DATE NOT NULL, 
-	status VARCHAR(24) NOT NULL, 
-	satisfied_by_qcd FLOAT NOT NULL, 
-	method VARCHAR(120) NOT NULL, 
-	id VARCHAR(36) NOT NULL, 
-	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
-	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
-	PRIMARY KEY (id), 
-	FOREIGN KEY(client_id) REFERENCES clients (id) ON DELETE CASCADE, 
-	FOREIGN KEY(account_id) REFERENCES accounts (id) ON DELETE CASCADE
-);
-
-CREATE INDEX ix_rmds_client_id ON rmds (client_id);
-
-CREATE INDEX ix_rmds_tax_year ON rmds (tax_year);
 
 CREATE TABLE scenarios (
 	goal_id VARCHAR(36), 
