@@ -22,12 +22,21 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-import { ApiError, api } from "@/lib/api";
+import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { DEMO_PASSWORD, type DemoAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge, Button, Card, Field, Input } from "@/components/ui";
 import { Logo } from "@/components/layout/logo";
+
+const DEMO_ACCOUNTS: DemoAccount[] = [
+  { label: "Client Demo", email: "priya.sharma@example.com", role: "client", role_label: "Client", full_name: "Priya Sharma", title: null, home_route: "/dashboard" },
+  { label: "Advisor Demo", email: "arjun.mehta@nexgile.example", role: "advisor", role_label: "Advisor", full_name: "Arjun Mehta", title: "Senior Wealth Advisor", home_route: "/advisor" },
+  { label: "Sponsor Demo", email: "deepa.krishnan@brightpath.example", role: "plan_sponsor", role_label: "Plan Sponsor", full_name: "Deepa Krishnan", title: "VP Human Resources", home_route: "/institutional" },
+  { label: "Participant Demo", email: "nikhil.verma@brightpath.example", role: "participant", role_label: "Participant", full_name: "Nikhil Verma", title: "Senior Engineer", home_route: "/participant" },
+  { label: "Compliance Demo", email: "neha.kapoor@nexgile.example", role: "compliance", role_label: "Compliance", full_name: "Neha Kapoor", title: "Head of Compliance", home_route: "/compliance" },
+  { label: "Admin Demo", email: "suresh.pillai@nexgile.example", role: "admin", role_label: "Admin", full_name: "Suresh Pillai", title: "Managing Director", home_route: "/admin" },
+];
 
 export default function LoginPage() {
   const router = useRouter();
@@ -38,19 +47,12 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [demoAccounts, setDemoAccounts] = useState<DemoAccount[]>([]);
+  const [demoAccounts] = useState<DemoAccount[]>(DEMO_ACCOUNTS);
   const [showForgot, setShowForgot] = useState(false);
 
   useEffect(() => {
     if (status === "authenticated" && user) router.replace(user.home_route);
   }, [status, user, router]);
-
-  useEffect(() => {
-    api
-      .get<DemoAccount[]>("/api/auth/demo-accounts")
-      .then(setDemoAccounts)
-      .catch(() => setDemoAccounts([]));
-  }, []);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
