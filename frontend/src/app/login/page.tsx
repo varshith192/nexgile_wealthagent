@@ -276,6 +276,7 @@ export default function LoginPage() {
                           {account.full_name}
                           {account.title ? ` · ${account.title}` : ""}
                         </span>
+                        <span className="block truncate font-mono text-xs text-ink-subtle">{account.email}</span>
                       </span>
                       <span className="flex shrink-0 items-center gap-2">
                         <Badge tone="outline">{account.home_route}</Badge>
