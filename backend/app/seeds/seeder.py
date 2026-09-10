@@ -127,13 +127,13 @@ TRADING_DAYS_PER_YEAR = 252
 # Every staff account uses the same demo password. Never a production credential.
 STAFF = [
     ("arjun.mehta@nexgile.example", "Arjun Mehta", Role.ADVISOR, "Senior Wealth Advisor", "Advisor Demo", True),
-    ("kavita.rao@nexgile.example", "Kavita Rao", Role.ADVISOR, "Wealth Advisor", "Advisor Demo (Alt)", True),
+    ("kavita.rao@nexgile.example", "Kavita Rao", Role.ADVISOR, "Wealth Advisor", None, False),
     ("neha.kapoor@nexgile.example", "Neha Kapoor", Role.COMPLIANCE, "Head of Compliance", "Compliance Demo", True),
     ("suresh.pillai@nexgile.example", "Suresh Pillai", Role.ADMIN, "Managing Director", "Admin Demo", True),
-    ("rajesh.bhatt@nexgile.example", "Rajesh Bhatt", Role.INVESTMENT_TEAM, "Portfolio Strategist", "Investment Team Demo", True),
-    ("meera.subramanian@nexgile.example", "Meera Subramanian", Role.TAX_SPECIALIST, "Director of Tax Planning", "Tax Specialist Demo", True),
-    ("vikram.chandrasekhar@nexgile.example", "Vikram Chandrasekhar", Role.ESTATE_TRUST, "Trust & Succession Counsel", "Estate Demo", True),
-    ("ritu.malhotra@nexgile.example", "Ritu Malhotra", Role.OPERATIONS, "Client Service Manager", "Operations Demo", True),
+    ("rajesh.bhatt@nexgile.example", "Rajesh Bhatt", Role.INVESTMENT_TEAM, "Portfolio Strategist", "Investment Team Demo", False),
+    ("meera.subramanian@nexgile.example", "Meera Subramanian", Role.TAX_SPECIALIST, "Director of Tax Planning", "Tax Specialist Demo", False),
+    ("vikram.chandrasekhar@nexgile.example", "Vikram Chandrasekhar", Role.ESTATE_TRUST, "Trust & Succession Counsel", "Estate Demo", False),
+    ("ritu.malhotra@nexgile.example", "Ritu Malhotra", Role.OPERATIONS, "Client Service Manager", "Operations Demo", False),
     ("deepa.krishnan@brightpath.example", "Deepa Krishnan", Role.PLAN_SPONSOR, "VP Human Resources", "Sponsor Demo", True),
     ("nikhil.verma@brightpath.example", "Nikhil Verma", Role.PARTICIPANT, "Senior Engineer", "Participant Demo", True),
 ]
