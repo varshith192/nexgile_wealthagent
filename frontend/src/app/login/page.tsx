@@ -118,8 +118,7 @@ export default function LoginPage() {
             Every account, goal and decision in one place.
           </h1>
           <p className="mt-5 text-base leading-7 text-sidebar-foreground/75">
-            Nexgile brings portfolios, goals, tax, estate and philanthropy together, surfaces what changed and
-            what it means, and moves every recommendation through review, approval and an audit trail.
+            Portfolios, goals, tax, estate and philanthropy — one platform, one audit trail.
           </p>
 
           <ul className="mt-9 space-y-4">
@@ -127,17 +126,17 @@ export default function LoginPage() {
               {
                 icon: TrendingUp,
                 title: "Verified figures, always",
-                body: "Every number comes from the calculation engine and shows its method, as-of date, assumptions and limitations.",
+                body: "Every number shows its method, date and assumptions.",
               },
               {
                 icon: Radar,
                 title: "WealthAgent intelligence",
-                body: "Insights, recommendations and next actions grounded in your own data — never a number it invented.",
+                body: "Insights grounded in your own data — never invented.",
               },
               {
                 icon: BadgeCheck,
                 title: "Controlled workflows",
-                body: "Nothing acts on its own. Recommendations move through human review and approval before anything happens.",
+                body: "Every recommendation moves through review and approval.",
               },
             ].map((feature) => (
               <li key={feature.title} className="flex gap-3.5">
